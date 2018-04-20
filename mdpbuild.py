@@ -6,9 +6,17 @@ from copy import deepcopy
 
 _mdp_entries = OrderedDict()
 
+def content_to_str(content):
+    out = ""
+    for string in content:
+        out += string + "\n"
+    return out
+
+
 class MDPDirectiveBase(docutils.parsers.rst.Directive):
     required_arguments=1
     optional_arguments=4
+    has_content = True
     @property
     def mdp_entries(self):
         """Refers to self.odict if it exists, otherwise the module-wide mdp_entries odict
@@ -23,13 +31,18 @@ class MDPDirectiveBase(docutils.parsers.rst.Directive):
 class MDPDirective(MDPDirectiveBase):
     def run(self):
         """Save the first argument of each parsed mdp directive and create an associated list for its values"""
-        self.mdp_entries[self.arguments[0]] = []
+        content = content_to_str(self.content)
+        content_doc = parse_rst(content)
+        self.mdp_entries[self.arguments[0]] = {"content": content, "options": []}
+        print(self.arguments[0])
         return []
     
 class MDPValueDirective(MDPDirectiveBase):
     def run(self):
         """Save the first argument of each parsed mdp-value directive to the last mdp directive parsed"""
-        list(self.mdp_entries.values())[-1].append(self.arguments[0])
+        content = content_to_str(self.content)
+        list(self.mdp_entries.values())[-1]["options"].append({"option": self.arguments[0], "content": content})
+        print(self.arguments[0])
         return []
     
 def not_a_role(*args, **kwargs):
@@ -59,14 +72,12 @@ docutils.parsers.rst.roles.register_canonical_role('mdp', not_a_role)
 docutils.parsers.rst.roles.register_canonical_role('mdp-value', not_a_role)
 docutils.parsers.rst.roles.register_canonical_role('ref', not_a_role)
 
-def parse_rst(path):
+def parse_rst(string):
     parser = docutils.parsers.rst.Parser()
     components = (docutils.parsers.rst.Parser,)
     settings = docutils.frontend.OptionParser(components=components).get_default_values()
     document = docutils.utils.new_document('<rst-doc>', settings=settings)
-    with open(path, 'r') as file:
-        for line in file:
-            parser.parse(line, document)
+    parser.parse(string, document) 
     return document
 
 class MDPBase():
@@ -77,9 +88,16 @@ class MDPBase():
         this_mdp_entries = OrderedDict()
         ThisMDPDirective = type('ThisMDPDirective', (MDPDirective,), {'odict': this_mdp_entries})
         ThisMDPValueDirective = type('ThisMDPValueDirective', (MDPValueDirective,), {'odict': this_mdp_entries})
-        with DirectivesRegistered(('mdp', ThisMDPDirective), ('mdp-value', ThisMDPValueDirective)):
-            parse_rst(docpath)
+        new_directives = (
+            ('mdp', ThisMDPDirective), 
+            ('MDP', ThisMDPDirective),
+            ('mdp-value', ThisMDPValueDirective)
+        )
+        with DirectivesRegistered(*new_directives):
+            with open(docpath, 'r') as file:
+                doc = parse_rst(file.read())
 
         attr = this_mdp_entries
+        attr["doc"] = doc
         return type(name, (cls,), attr)
 
