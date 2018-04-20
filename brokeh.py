@@ -16,13 +16,16 @@ import ipywidgets as widgets
 from bokeh.models import ColumnDataSource, CustomJS, HoverTool, Range1d
 from bokeh.plotting import figure, show
 from bokeh.plotting.figure import Figure
-from bokeh.io import push_notebook
+from bokeh.io import push_notebook, output_notebook
 import nglview as nv
 import traitlets as tl
 import traittypes as tt
 from copy import copy
 from bokeh.palettes import colorblind 
 import numpy as np
+from itertools import zip_longest
+from mdtraj import Trajectory
+from pandas import DataFrame
 
 cds_hack = {'outwidget': widgets.Output()}
 
@@ -217,52 +220,6 @@ class BokehWrapper(widgets.Output):
                 p.plot_height = newheight
 
 
-
-
-
-def linked_bokeh_ngl(figure, nglviews, 
-    button_layout=None, nglview_layout=None, 
-    figure_layout=None, box_layout=None):
-    if button_layout is None:
-        button_layout  = widgets.Layout(height='30px')
-    if nglview_layout is None:
-        nglview_layout = widgets.Layout(width='250px', height='300px', flex='0 0 auto')
-    if figure_layout is None:
-        figure_layout  = widgets.Layout(width='400', height='550')
-    if box_layout is None:
-        box_layout     = widgets.Layout(display='flex',
-                                        flex_flow='column wrap',
-                                        height='650px',
-                                        width='100%',
-                                        align_items='center')
-
-    out = BokehWrapper(figure, layout=figure_layout)
-
-    button = widgets.Button(
-        description='Next selected frame',
-        disabled=False,
-        button_style='', # 'success', 'info', 'warning', 'danger' or ''
-        tooltip='Set NGLView frame to the next selected point',
-        layout=button_layout
-    )
-    for nglview in nglviews:
-        nglview.layout = nglview_layout
-        nglview._remote_call("setSize", target='Widget',
-                             args=["100%", "100%"])
-
-
-    def on_button_clicked(b):
-        for nglview in nglviews:
-            nglview.next_selected()
-
-    button.on_click(on_button_clicked)
-
-    # nvs = widgets.VBox([button] + nglviews)
-
-    # return widgets.HBox([out, nvs])
-    return widgets.Box([out, button] + nglviews, layout=box_layout)
-
-
 class NGLViewTrait(tl.Instance):
     klass = SeleNGLWidget
 
@@ -271,15 +228,17 @@ class CDSTrait(tl.Instance):
 
 
 class FrameLinkedPlot(widgets.Box):
-    plotx = tl.Integer(default_value=0)
-    ploty = tl.Integer(default_value=1)
+    ploty = tl.List(tl.Union([tl.Integer(), tl.Unicode()]), default_value=[0])
+    plotx = tl.Union([tl.Integer(), tl.Unicode()], default_value=1)
     stride = tl.Integer(default_value=1)
     title = tl.Unicode(default_value='')
 
-    reduced = tt.Array(read_only=True)
+    colvars = tl.List(trait=tl.Union([tt.DataFrame(), tt.Array()]), read_only=True)
     bokeh = tl.Instance(klass=BokehWrapper, read_only=True)
     views = tl.List(trait=NGLViewTrait(), read_only=True)
     sources = tl.List(trait=CDSTrait(), read_only=True)
+
+    _reuse_colvars = tl.Bool(read_only=True)
 
     def_button_layout = widgets.Layout(height='30px')
     def_view_layout   = widgets.Layout(width='250px', height='300px', flex='0 0 auto')
@@ -290,11 +249,50 @@ class FrameLinkedPlot(widgets.Box):
                                     width='100%',
                                     align_items='center')
 
-
-
-    def __init__(self, reduced, mdtraj_trajectories, plotx_label=None, ploty_label=None, **kwargs):
+    def __init__(self, 
+        colvars, 
+        mdtraj_trajectories, 
+        plotx_label=None, 
+        ploty_label=None, 
+        ploty=None, 
+        legendlocation='top_right',
+        **kwargs):
         super().__init__(**kwargs)
+
+        # colvars and mdtraj_trajectories can be specified either as a list or a single item
+        if isinstance(mdtraj_trajectories, Trajectory):
+            mdtrajs = [mdtraj_trajectories]
+        else:
+            mdtrajs = list(mdtraj_trajectories)
+
+        if isinstance(colvars, DataFrame):
+            cvs = [colvars]
+        else:
+            cvs = list(colvars)
+
+        if len(mdtrajs) != 1 and len(cvs) != len(mdtrajs):
+            raise ValueError("Should have either 1 mdtraj trajectory, or one for every colvar")
+
+        # ploty wasn't given to super, so it's currently the default per the traitlet
+        # So if it was user-specified, we need to make sure its a list and then
+        # throw it in
+        if isinstance(ploty, str):
+            print("ploty is a str")
+            self.ploty = [ploty] * len(cvs)
+        elif ploty is not None:
+            try:
+                self.ploty = list(iter(ploty))
+            except TypeError:
+                self.ploty = [ploty] * len(cvs)
+            else:
+                if len(cvs) == 1: cvs = cvs * len(self.ploty)
+        if len(cvs) != len(self.ploty):
+            raise ValueError("Couldn't broadcast colvars to plotys: {}, {}".format(len(cvs), len(ploty)))
+
+        self.set_trait('colvars', cvs)
+        
         self.layout = copy(self.def_box_layout)
+
         plotx = self.plotx
         ploty = self.ploty
 
@@ -308,28 +306,33 @@ class FrameLinkedPlot(widgets.Box):
         ])
 
         if plotx_label is None:
-            plotx_label = "Reduced coordinate {}".format(plotx+1)
+            plotx_label = "Collective variable {}".format(plotx+1)
         if plotx_label is None:
-            ploty_label = "Reduced coordinate {}".format(ploty+1)
+            ploty_label = "Collective variable {}".format(ploty+1)
 
         p = figure(
-            title='Cartesian coordinate PCA',
+            title=self.title,
             x_axis_label=plotx_label,
             y_axis_label=ploty_label,
             tools=TOOLS)
         p.add_tools(hover)
         figure_layout = copy(self.def_figure_layout)
         bokeh = BokehWrapper(p, layout=figure_layout, showing=False)
-
-        self.set_trait('reduced', reduced)
         self.set_trait('bokeh', bokeh)
 
-        sources, views = self._init_plots_views(mdtraj_trajectories, 
+        sources, views = self._init_plots_views(mdtrajs, 
                                                 plotx_label, 
                                                 ploty_label)
+
+        p.legend.click_policy = "hide"
+        p.legend.location = legendlocation
+        if len(cvs) == 1 or len(cvs) == len(mdtrajs):
+            p.legend.visible = False
+
+        self.bokeh.show()
+
         self.set_trait('views', views)
         self.set_trait('sources', sources)
-        self.bokeh.show()
 
         button = widgets.Button(
             description='Next selected frame',
@@ -348,27 +351,55 @@ class FrameLinkedPlot(widgets.Box):
             view.next_selected()
 
     def _init_plots_views(self, mdtraj_trajectories, plotx_label, ploty_label):
-        mdtraj_trajectories
-        reduced = self.reduced
+        colvars = self.colvars
         stride = self.stride
         plotx = self.plotx
-        ploty = self.ploty
+        plotys = self.ploty
         p = self.figure
-        palette = colorblind['Colorblind'][len(mdtraj_trajectories)]
+
+        n = len(colvars)
+        if n >= 3:
+            palette = colorblind['Colorblind'][n]
+        else:
+            palette = colorblind['Colorblind'][3]
+        palette = palette[::-1]
+
         view_layout = copy(self.def_view_layout)
+        if len(mdtraj_trajectories) == 1:
+            view_layout.width='500px'
+            view_layout.height='600px'
 
         sources = []
         views = []
-        for n,(xyz, traj) in enumerate(zip(reduced, mdtraj_trajectories)):
-            times = traj.time[::stride]
+
+        for n,(colvar, traj, ploty) in enumerate(zip_longest(colvars, mdtraj_trajectories, plotys)):
+            if traj is not None:
+                working_traj = traj
+
+            times = working_traj.time[::stride]
             
-            x = xyz[::stride, plotx]
-            y = xyz[::stride, ploty]
+            if len(colvar) != len(working_traj):
+                raise ValueError("Colvar and trajectory should have same number of frames")
             
+            if isinstance(colvar, np.ndarray):
+                x = colvar[::stride, plotx]
+                y = colvar[::stride, ploty]
+            else:
+                x = colvar[plotx][::stride]
+                y = colvar[ploty][::stride]
+
+            if isinstance(ploty, str):
+                this_ploty_label = ploty
+            elif ploty_label is not None:
+                this_ploty_label = ploty_label
+            else:
+                this_ploty_label = str(ploty)
+            ploty_label_list = [this_ploty_label] * len(y)
+
             source = ColumnDataSource(data={
                 'run': [n]*len(x),
                 'plotx_label': [plotx_label]*len(x),
-                'ploty_label': [ploty_label]*len(y),
+                'ploty_label': ploty_label_list,
                 'time': times/1000,
                 'x': x,
                 'y': y,
@@ -378,23 +409,79 @@ class FrameLinkedPlot(widgets.Box):
             
             colour = palette[n-1]
             
-            view = show_mdtraj(traj, gui=False)
+            if traj is not None:
+                view = show_mdtraj(traj, gui=False)
+                view.clear_representations()
+                view.add_cartoon(color=colour)
+                view.frame_stride = stride
+                view.layout = view_layout
+                view._set_sync_camera()
+                views.append(view)
+
             view.link_to_bokeh_ds(source)
-            view.add_cartoon(color=colour)
-            view.frame_stride = stride
-            view.layout = view_layout
-            view._set_sync_camera()
-            views.append(view)
             
-            p.scatter(x='x', y='y', source=source, color=colour, fill_alpha='alphas')
+            p.scatter(x='x', y='y', 
+                      source=source, 
+                      color=colour, 
+                      fill_alpha='alphas',
+                      legend=this_ploty_label)
 
         return sources, views
 
     @property
     def figure(self):
         return self.bokeh.figure
-
+    
     @property
     def mdtraj_trajectories(self):
-        return [view.original_trajectory for view in self.views]
+        return (view.original_trajectory for view in self.views)
+
+    @property
+    def view(self):
+        if len(self.views) == 1:
+            return self.views[0]
+        else:
+            raise ValueError("FrameLinkedPlot has multiple views")
+
+    @property
+    def source(self):
+        if len(self.views) == 1:
+            return self.sources[0]
+        else:
+            raise ValueError("FrameLinkedPlot has multiple sources")
     
+def plot_vs_time(toplot, df, traj, timeaxis='Time', **kwargs):
+    """Plot df's columns with headings in toplot against time"""
+    try:
+        df_time = df[timeaxis]
+    except KeyError:
+        # Dict or dataframe or similar
+        df[timeaxis] = traj.time
+    except (IndexError, TypeError):
+        # Array or list or similar
+        try: 
+            data = df[toplot]
+        except (IndexError, TypeError):
+            data = df
+        df = DataFrame({timeaxis: traj.time, toplot: data})
+    else:
+        if not np.isclose(df_time, traj.time).all():
+            raise ValueError("Inconsistent times between df and traj")
+
+    if 'ploty_label' not in kwargs:
+        kwargs['ploty_label'] = str(toplot)
+    if 'title' not in kwargs:
+        kwargs['title'] = kwargs['ploty_label'] + " over time"
+    
+    
+    linkwidg = FrameLinkedPlot(colvars=df, 
+                               mdtraj_trajectories=traj, 
+                               plotx_label='Time (ps)', 
+                               plotx=timeaxis,
+                               ploty=toplot,
+                               **kwargs)
+
+    return linkwidg
+
+
+output_notebook()
