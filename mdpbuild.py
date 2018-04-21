@@ -32,8 +32,12 @@ class MDPDirective(MDPDirectiveBase):
     def run(self):
         """Save the first argument of each parsed mdp directive and create an associated list for its values"""
         content = content_to_str(self.content)
-        content_doc = parse_rst(content)
-        self.mdp_entries[self.arguments[0]] = {"content": content, "options": []}
+        options_list = []
+        ThisMDPValueDirective = type('ThisMDPValueDirective', (MDPValueDirective,), {'list': options_list})
+        with DirectivesRegistered(('mdp-value', ThisMDPValueDirective)):
+            content_doc = parse_rst(content)
+
+        self.mdp_entries[self.arguments[0]] = {"content": content, "options": options_list}
         print(self.arguments[0])
         return []
     
@@ -41,7 +45,11 @@ class MDPValueDirective(MDPDirectiveBase):
     def run(self):
         """Save the first argument of each parsed mdp-value directive to the last mdp directive parsed"""
         content = content_to_str(self.content)
-        list(self.mdp_entries.values())[-1]["options"].append({"option": self.arguments[0], "content": content})
+        try:
+            options_list = self.list
+        except AttributeError:
+            options_list = list(self.mdp_entries.values())[-1]["options"]
+        options_list.append({"option": self.arguments[0], "content": content})
         print(self.arguments[0])
         return []
     
@@ -87,15 +95,12 @@ class MDPBase():
         """Create an MDP class from a mdp-options.rst file distributed with GROMACS"""
         this_mdp_entries = OrderedDict()
         ThisMDPDirective = type('ThisMDPDirective', (MDPDirective,), {'odict': this_mdp_entries})
-        ThisMDPValueDirective = type('ThisMDPValueDirective', (MDPValueDirective,), {'odict': this_mdp_entries})
         new_directives = (
             ('mdp', ThisMDPDirective), 
-            ('MDP', ThisMDPDirective),
-            ('mdp-value', ThisMDPValueDirective)
+            ('MDP', ThisMDPDirective)            
         )
-        with DirectivesRegistered(*new_directives):
-            with open(docpath, 'r') as file:
-                doc = parse_rst(file.read())
+        with DirectivesRegistered(*new_directives), open(docpath, 'r') as file:
+            doc = parse_rst(file.read())
 
         attr = this_mdp_entries
         attr["doc"] = doc
