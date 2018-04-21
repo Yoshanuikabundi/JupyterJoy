@@ -1939,20 +1939,20 @@ AWH adaptive biasing
 
    .. mdp-value:: exp-linear
 
-   Each bias keeps a reference weight histogram for the coordinate samples.
-   Its size sets the magnitude of the bias function and free energy estimate updates
-   (few samples corresponds to large updates and vice versa).
-   Thus, its growth rate sets the maximum convergence rate.
-   By default, there is an initial stage in which the histogram grows close to exponentially (but slower than the sampling rate).
-   In the final stage that follows, the growth rate is linear and equal to the sampling rate (set by :mdp:`awh-nstsample`).
-   The initial stage is typically necessary for efficient convergence when starting a new simulation where
-   high free energy barriers have not yet been flattened by the bias.
+      Each bias keeps a reference weight histogram for the coordinate samples.
+      Its size sets the magnitude of the bias function and free energy estimate updates
+      (few samples corresponds to large updates and vice versa).
+      Thus, its growth rate sets the maximum convergence rate.
+      By default, there is an initial stage in which the histogram grows close to exponentially (but slower than the sampling rate).
+      In the final stage that follows, the growth rate is linear and equal to the sampling rate (set by :mdp:`awh-nstsample`).
+      The initial stage is typically necessary for efficient convergence when starting a new simulation where
+      high free energy barriers have not yet been flattened by the bias.
 
    .. mdp-value:: linear
 
-   As :mdp-value:`awh1-growth=exp-linear` but skip the initial stage. This may be useful if there is *a priori*
-   knowledge (see :mdp:`awh1-error-init`) which eliminates the need for an initial stage. This is also
-   the setting compatible with :mdp-value:`awh1-target=local-boltzmann`.
+      As :mdp-value:`awh1-growth=exp-linear` but skip the initial stage. This may be useful if there is *a priori*
+      knowledge (see :mdp:`awh1-error-init`) which eliminates the need for an initial stage. This is also
+      the setting compatible with :mdp-value:`awh1-target=local-boltzmann`.
 
 .. mdp:: awh1-equilibrate-histogram
 

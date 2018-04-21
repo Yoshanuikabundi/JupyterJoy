@@ -3,6 +3,7 @@ import docutils.nodes
 import docutils.parsers.rst
 import docutils.utils
 from copy import deepcopy
+import re
 
 _mdp_entries = OrderedDict()
 
@@ -17,6 +18,7 @@ class MDPDirectiveBase(docutils.parsers.rst.Directive):
     required_arguments=1
     optional_arguments=4
     has_content = True
+    _re_single_newlines = re.compile(r'\n(?!\n)')
     @property
     def mdp_entries(self):
         """Refers to self.odict if it exists, otherwise the module-wide mdp_entries odict
@@ -29,32 +31,51 @@ class MDPDirectiveBase(docutils.parsers.rst.Directive):
 
 
 class MDPDirective(MDPDirectiveBase):
+    _re_def_and_units_line = re.compile(r"\((?P<default>.+)\) (?P<units>\[.+\])")
+
     def run(self):
         """Save the first argument of each parsed mdp directive and create an associated list for its values"""
         content = content_to_str(self.content)
-        options_list = []
-        ThisMDPValueDirective = type('ThisMDPValueDirective', (MDPValueDirective,), {'list': options_list})
+        options_dict = OrderedDict()
+        ThisMDPValueDirective = type('ThisMDPValueDirective', (MDPValueDirective,), {'odict': options_dict})
         with DirectivesRegistered(('mdp-value', ThisMDPValueDirective)):
             content_doc = parse_rst(content)
-
-        self.mdp_entries[self.arguments[0]] = {"content": content, "options": options_list}
-        print(self.arguments[0])
+        docstring, default, units = self.process_content_doc(content_doc)
+        self.mdp_entries[self.arguments[0]] = {
+            "docstring": docstring, 
+            "options": options_dict,
+            "default": default,
+            "units": units
+        }
         return []
+
+    def process_content_doc(self, content_doc):
+        """Split a content doc tree into the docstring, default and units"""
+        content = content_doc.astext()
+        match = self._re_def_and_units_line.match(content)
+        if match:
+            default, units = match.group("default"), match.group("units")
+        else:
+            default, units = None, None
+        docstring = re.sub(self._re_single_newlines , ' ', content)
+        return docstring, default, units
     
 class MDPValueDirective(MDPDirectiveBase):
     def run(self):
-        """Save the first argument of each parsed mdp-value directive to the last mdp directive parsed"""
+        """Read and process mdp-values into dicts with docstrings"""
         content = content_to_str(self.content)
+        content_doc = parse_rst(content)
+        docstring = re.sub(self._re_single_newlines , ' ', content_doc.astext())
         try:
-            options_list = self.list
+            options_dict = self.odict
         except AttributeError:
-            options_list = list(self.mdp_entries.values())[-1]["options"]
-        options_list.append({"option": self.arguments[0], "content": content})
-        print(self.arguments[0])
+            options_dict = list(self.mdp_entries.values())[-1]["options"]
+        options_dict[self.arguments[0]] = docstring
         return []
     
-def not_a_role(*args, **kwargs):
-    return ([],[])
+def ignore_role(name, rawtext, text, lineno, inliner, options={}, content=[]):
+    node = docutils.nodes.Text(text)
+    return ([node],[])
 
 class DirectivesRegistered():
     """Context manager for registration of directives"""
@@ -76,9 +97,9 @@ class DirectivesRegistered():
 # docutils.parsers.rst.directives.register_directive('mdp', MDPDirective)
 # docutils.parsers.rst.directives.register_directive('mdp-value', MDPValueDirective)
 
-docutils.parsers.rst.roles.register_canonical_role('mdp', not_a_role)
-docutils.parsers.rst.roles.register_canonical_role('mdp-value', not_a_role)
-docutils.parsers.rst.roles.register_canonical_role('ref', not_a_role)
+docutils.parsers.rst.roles.register_local_role('mdp', ignore_role)
+docutils.parsers.rst.roles.register_local_role('mdp-value', ignore_role)
+docutils.parsers.rst.roles.register_local_role('ref', ignore_role)
 
 def parse_rst(string):
     parser = docutils.parsers.rst.Parser()
