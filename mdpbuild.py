@@ -39,7 +39,7 @@ class MDPDirective(MDPDirectiveBase):
         options_dict = OrderedDict()
         ThisMDPValueDirective = type('ThisMDPValueDirective', (MDPValueDirective,), {'odict': options_dict})
         with DirectivesRegistered(('mdp-value', ThisMDPValueDirective)):
-            content_doc = parse_rst(content)
+            content_doc = parse_rst_string(content)
         docstring, default, units = self.process_content_doc(content_doc)
         self.mdp_entries[self.arguments[0]] = {
             "docstring": docstring, 
@@ -64,7 +64,7 @@ class MDPValueDirective(MDPDirectiveBase):
     def run(self):
         """Read and process mdp-values into dicts with docstrings"""
         content = content_to_str(self.content)
-        content_doc = parse_rst(content)
+        content_doc = parse_rst_string(content)
         docstring = re.sub(self._re_single_newlines , ' ', content_doc.astext())
         try:
             options_dict = self.odict
@@ -101,7 +101,7 @@ docutils.parsers.rst.roles.register_local_role('mdp', ignore_role)
 docutils.parsers.rst.roles.register_local_role('mdp-value', ignore_role)
 docutils.parsers.rst.roles.register_local_role('ref', ignore_role)
 
-def parse_rst(string):
+def parse_rst_string(string):
     parser = docutils.parsers.rst.Parser()
     components = (docutils.parsers.rst.Parser,)
     settings = docutils.frontend.OptionParser(components=components).get_default_values()
@@ -109,21 +109,26 @@ def parse_rst(string):
     parser.parse(string, document) 
     return document
 
+def parse_rst_file(path):
+    mdp_entries = OrderedDict()
+    ThisMDPDirective = type('ThisMDPDirective', (MDPDirective,), {'odict': mdp_entries})
+    new_directives = (
+        ('mdp', ThisMDPDirective), 
+        ('MDP', ThisMDPDirective)            
+    )
+    with DirectivesRegistered(*new_directives), open(path, 'r') as file:
+        doc = parse_rst_string(file.read())
+    return mdp_entries, doc
+
+
 class MDPBase():
     """Base class for creating MDP files"""
     @classmethod
     def create_subclass_from_doc(cls, name, docpath):
         """Create an MDP class from a mdp-options.rst file distributed with GROMACS"""
-        this_mdp_entries = OrderedDict()
-        ThisMDPDirective = type('ThisMDPDirective', (MDPDirective,), {'odict': this_mdp_entries})
-        new_directives = (
-            ('mdp', ThisMDPDirective), 
-            ('MDP', ThisMDPDirective)            
-        )
-        with DirectivesRegistered(*new_directives), open(docpath, 'r') as file:
-            doc = parse_rst(file.read())
-
-        attr = this_mdp_entries
-        attr["doc"] = doc
+        mdp_entries, doc = parse_rst_file(docpath)
+        attr = {}
+        attr['options'] = mdp_entries
+        attr['doc'] = doc
         return type(name, (cls,), attr)
 
