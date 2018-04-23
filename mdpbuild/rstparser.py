@@ -1,9 +1,19 @@
-from collections import OrderedDict
+from collections import OrderedDict, Mapping
 import docutils.nodes
 import docutils.parsers.rst
 import docutils.utils
 from copy import deepcopy
 import re
+
+class ReadOnlyDict(Mapping):
+    def __init__(self, data):
+        self.__data__ = data
+    def __getitem__(self, key): 
+        return self.__data__[key]
+    def __len__(self):
+        return len(self.__data__)
+    def __iter__(self):
+        return iter(self.__data__)
 
 _mdp_entries = OrderedDict()
 
@@ -41,12 +51,12 @@ class MDPDirective(MDPDirectiveBase):
         with DirectivesRegistered(('mdp-value', ThisMDPValueDirective)):
             content_doc = parse_rst_string(content)
         docstring, default, units = self.process_content_doc(content_doc)
-        self.mdp_entries[self.arguments[0]] = {
+        self.mdp_entries[self.arguments[0]] = ReadOnlyDict({
             "docstring": docstring, 
             "options": options_dict,
             "default": default,
             "units": units
-        }
+        })
         return []
 
     def process_content_doc(self, content_doc):
