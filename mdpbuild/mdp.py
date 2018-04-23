@@ -54,7 +54,7 @@ class MDPBase():
         name, mdp_entry = self._get_mdp_entry(name)
 
         if mdp_entry['options']:
-            if value in mdp_entry['options']:
+            if value.lower() in mdp_entry['options']:
                 self.values[name] = value
             else: 
                 raise AttributeError("Acceptable values for {}.{} are {}, not '{}'".format(self, name, list(mdp_entry['options']), value))

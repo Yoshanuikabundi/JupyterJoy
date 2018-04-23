@@ -51,7 +51,7 @@ class MDPDirective(MDPDirectiveBase):
         with DirectivesRegistered(('mdp-value', ThisMDPValueDirective)):
             content_doc = parse_rst_string(content)
         docstring, default, units = self.process_content_doc(content_doc)
-        self.mdp_entries[self.arguments[0]] = ReadOnlyDict({
+        self.mdp_entries[self.arguments[0].lower()] = ReadOnlyDict({
             "docstring": docstring, 
             "options": options_dict,
             "default": default,
@@ -80,7 +80,7 @@ class MDPValueDirective(MDPDirectiveBase):
             options_dict = self.odict
         except AttributeError:
             options_dict = list(self.mdp_entries.values())[-1]["options"]
-        options_dict[self.arguments[0]] = docstring
+        options_dict[self.arguments[0].lower()] = docstring
         return []
     
 def ignore_role(name, rawtext, text, lineno, inliner, options={}, content=[]):
