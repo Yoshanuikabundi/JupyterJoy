@@ -14,6 +14,8 @@ class ReadOnlyDict(Mapping):
         return len(self.__data__)
     def __iter__(self):
         return iter(self.__data__)
+    def __repr__(self):
+        return 'ReadOnlyDict({})'.format(repr(self.__data__))
 
 _mdp_entries = OrderedDict()
 
@@ -41,7 +43,7 @@ class MDPDirectiveBase(docutils.parsers.rst.Directive):
 
 
 class MDPDirective(MDPDirectiveBase):
-    _re_def_and_units_line = re.compile(r"\((?P<default>.+)\) (?P<units>\[.+\])")
+    _re_def_and_units_line = re.compile(r"(?:\((?P<default>.+)\) )?(?P<units>\[.+\])?")
 
     def run(self):
         """Save the first argument of each parsed mdp directive and create an associated list for its values"""

@@ -1,8 +1,9 @@
 from collections import OrderedDict, Mapping
-from .rstparser import parse_rst_file
+from .rstparser import parse_rst_file, ReadOnlyDict
 import os
 import re
 from numbers import Number
+from copy import deepcopy
 
 
 
@@ -47,22 +48,53 @@ class MDPBase():
         try:
             return self.values[name]
         except KeyError:
-            return Default(mdp_entry['default'])
+            if mdp_entry['default']:
+                return Default(mdp_entry['default'])
+            elif mdp_entry['options']:
+                return Default(list(mdp_entry['options'])[0])
+            else:
+                return Default(None)
+
+    @staticmethod
+    def _check_number(value):
+        if isinstance(value, str):
+            itervalues = []
+            value_to_save = value
+            for val in value.split():
+                try:
+                    itervalues.append(int(val))
+                except ValueError:
+                    try:
+                        itervalues.append(float(val))
+                    except ValueError:
+                        pass
+        else:
+            try:
+                itervalues = list(value)
+            except TypeError:
+                itervalues = [value]
+                value_to_save = value
+            else:
+                value_to_save = ' '.join(str(x) for x in value)
+        for val in itervalues:
+            if not isinstance(val, Number):
+                raise AttributeError("{}.{} should be a Number expressed in units of {}, not {}".format(self, name, mdp_entry['units'], repr(value)))
+        return value_to_save 
 
     def __setattr__(self, name, value):
         """Set the value of the setting, as long as its appropriate"""
         name, mdp_entry = self._get_mdp_entry(name)
 
-        if mdp_entry['options']:
+        if mdp_entry['units']:
+            # If the mdp_entry has units specified, then its a number,
+            # which means any options set are probably ranges. We should
+            # make sure value is numeric and then just set it.
+            self.values[name] = self._check_number(value)
+        elif mdp_entry['options']:
             if value.lower() in mdp_entry['options']:
                 self.values[name] = value
             else: 
                 raise AttributeError("Acceptable values for {}.{} are {}, not '{}'".format(self, name, list(mdp_entry['options']), value))
-        elif mdp_entry['units']:
-            if isinstance(value, Number):
-                self.values[name] = value
-            else:
-                raise AttributeError("{}.{} should be a Number expressed in units of {}".format(self, name, mdp_entry['units']))
         else:
             self.values[name] = value
 
@@ -78,16 +110,16 @@ class MDPBase():
     @classmethod
     def _get_mdp_entry(cls, name):
         """Return the options dict entry for name"""
-        name = name.replace('_', '-')
+        name = name.replace('_', '-').lower()
         try:
             return name, cls.options[name]
         except KeyError:
             raise AttributeError("{} object has no attribute '{}'".format(cls, name))
 
-
-    def help(self, option, value=None):
+    @classmethod
+    def help(cls, option, value=None):
         """Return the docstring for the option, or its value"""
-        option, mdp_entry = self._get_mdp_entry(option)
+        option, mdp_entry = cls._get_mdp_entry(option)
         if value is None:
             out = mdp_entry['docstring']
             if mdp_entry['options']:
@@ -99,7 +131,7 @@ class MDPBase():
             out = mdp_entry['options'][value]
         return out
 
-    def write(self):
+    def write(self, tofile=None):
         """Return all the changed settings and comments in mdp format"""
         out = []
         keypad = 0
@@ -124,7 +156,11 @@ class MDPBase():
                 if 'after' in comments:
                     outstr += '; ' + str(comments['after']).replace('\n', '\n; ') + "\n"
         outstr = outstr.replace('; \n', '\n')
-        return outstr
+        if tofile:
+            with open(tofile, 'w') as f:
+                print(outstr, file=f, flush=True)
+        else:
+            return outstr
 
     def comment(self, option, comment, placement="on"):
         """Add a comment to the option"""
@@ -149,17 +185,26 @@ class MDPBase():
         except KeyError:
             return {}
 
-    _re_mdp_line_match = re.compile(r'\s*(?P<key>\S+?)\s*=\s*(?P<value>\S+)')
+    def comment_total_time(self):
+        total_ns = self.nsteps * self.dt / 1000
+        self.comment('nsteps', "{} ns".format(total_ns), 'on')
+
+    def set_time(self, dt_fs, time_ns):
+        self.dt = dt_fs / 1000
+        self.nsteps = int(time_ns / self.dt * 1000)
+        self.comment_total_time()
+
+    _re_mdp_line_match = re.compile(r'^\s*(?P<key>\S*?)\s*=\s*(?P<value>.*?)\s*$')
 
     def read_mdp(self, mdp):
         try:
-            values = mdp.values
-            comments = mdp.comments
+            values = deepcopy(mdp.values)
+            comments = deepcopy(mdp.comments)
         except AttributeError:
             hangover_comment = ''
             values = {}
             comments = {}
-            for line in mdp:
+            for line in mdp.splitlines():
                 try:
                     command, comment = line.split(';', maxsplit=1)
                 except ValueError:
@@ -179,7 +224,7 @@ class MDPBase():
                         comments[key]['before'] = hangover_comment.replace('\n','',1)
                         hangover_comment = ''
                 elif command:
-                    raise ValueError("Uncommented text not matched!")
+                    raise ValueError("Uncommented text not matched: {}".format(repr(line)))
                 else:
                     hangover_comment += '\n' + comment
             if hangover_comment:
@@ -196,6 +241,21 @@ class MDPBase():
             for placement,comment in comment_dict.items():
                 self.comment(key, comment, placement)
 
+    @classmethod
+    def add_obsolete(cls, name, docstring='Obsolete'):
+        obs_dict = ReadOnlyDict({
+            "docstring": docstring, 
+            "options": OrderedDict(),
+            "default": 'Obsolete',
+            "units": None
+        })
+        try:
+            cls._get_mdp_entry(name)
+        except AttributeError:
+            cls.options[name] = obs_dict
+        else:
+            raise ValueError('MDP option {} already exists.'.format(name))
+
 
 
 
@@ -203,3 +263,4 @@ class MDPBase():
 gmxdocs_path = os.path.dirname(__file__) + "/gmxdocs"
 
 MDP20181 = MDPBase.create_subclass_from_doc('MDP20181', '{}/2018.1/mdp-options.rst'.format(gmxdocs_path))
+MDP20181.add_obsolete('title')
