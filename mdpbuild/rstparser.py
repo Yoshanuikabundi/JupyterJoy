@@ -25,6 +25,9 @@ def content_to_str(content):
         out += string + "\n"
     return out
 
+def process_name(name):
+    return name.replace('_', '').replace('-', '').lower()
+
 
 class MDPDirectiveBase(docutils.parsers.rst.Directive):
     required_arguments=1
@@ -53,7 +56,8 @@ class MDPDirective(MDPDirectiveBase):
         with DirectivesRegistered(('mdp-value', ThisMDPValueDirective)):
             content_doc = parse_rst_string(content)
         docstring, default, units = self.process_content_doc(content_doc)
-        self.mdp_entries[self.arguments[0].lower()] = ReadOnlyDict({
+        name = process_name(self.arguments[0])
+        self.mdp_entries[name] = ReadOnlyDict({
             "docstring": docstring, 
             "options": options_dict,
             "default": default,

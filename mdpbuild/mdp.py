@@ -1,5 +1,5 @@
 from collections import OrderedDict, Mapping
-from .rstparser import parse_rst_file, ReadOnlyDict
+from .rstparser import parse_rst_file, ReadOnlyDict, process_name
 import os
 import re
 from numbers import Number
@@ -110,7 +110,7 @@ class MDPBase():
     @classmethod
     def _get_mdp_entry(cls, name):
         """Return the options dict entry for name"""
-        name = name.replace('_', '-').lower()
+        name = process_name(name)
         try:
             return name, cls.options[name]
         except KeyError:
