@@ -58,6 +58,7 @@ class MDPDirective(MDPDirectiveBase):
         docstring, default, units = self.process_content_doc(content_doc)
         name = process_name(self.arguments[0])
         self.mdp_entries[name] = ReadOnlyDict({
+            "docname": self.arguments[0],
             "docstring": docstring, 
             "options": options_dict,
             "default": default,
@@ -86,7 +87,7 @@ class MDPValueDirective(MDPDirectiveBase):
             options_dict = self.odict
         except AttributeError:
             options_dict = list(self.mdp_entries.values())[-1]["options"]
-        options_dict[self.arguments[0].lower()] = docstring
+        options_dict[self.arguments[0]] = docstring
         return []
     
 def ignore_role(name, rawtext, text, lineno, inliner, options={}, content=[]):

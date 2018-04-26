@@ -3,9 +3,9 @@ from .rstparser import parse_rst_file, ReadOnlyDict, process_name
 import os
 import re
 from numbers import Number
-from copy import deepcopy
+from copy import copy, deepcopy
 
-
+tail_comment = "__TAIL_COMMENT__"
 
 class Default():
     """Class to signal that a setting hasn't been specified"""
@@ -17,13 +17,15 @@ class Default():
 
 class MDPBase():
     """Base class for creating MDP files"""
+    obsoletes = set([])
     @classmethod
     def create_subclass_from_doc(cls, name, docpath):
         """Create an MDP class from a mdp-options.rst file distributed with GROMACS"""
         mdp_entries, doc = parse_rst_file(docpath)
         attr = {
             'options': mdp_entries,
-            'doc': doc
+            'doc': doc,
+            'obsoletes': copy(cls.obsoletes)
         }
         return type(name, (cls,), attr)
 
@@ -91,7 +93,7 @@ class MDPBase():
             # make sure value is numeric and then just set it.
             self.values[name] = self._check_number(value)
         elif mdp_entry['options']:
-            if value.lower() in mdp_entry['options']:
+            if process_name(value) in (process_name(v) for v in mdp_entry['options']):
                 self.values[name] = value
             else: 
                 raise AttributeError("Acceptable values for {}.{} are {}, not '{}'".format(self, name, list(mdp_entry['options']), value))
@@ -110,11 +112,12 @@ class MDPBase():
     @classmethod
     def _get_mdp_entry(cls, name):
         """Return the options dict entry for name"""
-        name = process_name(name)
         try:
-            return name, cls.options[name]
+            options_dict = cls.options[process_name(name)]
         except KeyError:
             raise AttributeError("{} object has no attribute '{}'".format(cls, name))
+        else:
+            return process_name(options_dict['docname']), options_dict
 
     @classmethod
     def help(cls, option, value=None):
@@ -135,27 +138,35 @@ class MDPBase():
         """Return all the changed settings and comments in mdp format"""
         out = []
         keypad = 0
-        for key in self.options:
+        for k in self.options:
+            if process_name(k) in self.obsoletes:
+                continue
+            key, mdp_entry = self._get_mdp_entry(k)
             try:
-                out.append((key, self.values[key]))
+                out.append((key, self.values[key], mdp_entry['docname']))
             except KeyError:
                 pass
             else:
-                keypad = max(keypad, len(key))
+                keypad = max(keypad, len(mdp_entry['docname']))
 
         outstr = ""
         fmt = "{{: <{}}} = {{}}".format(keypad)
-        for key,value in out:
+        for key,value,docname in out:
                 comments = self.get_comments(key) 
                 if 'before' in comments:
                     outstr += '; ' + str(comments['before']).replace('\n', '\n; ') + "\n"
-                outstr += fmt.format(key, value)
+                outstr += fmt.format(docname, value)
                 if 'on' in comments:
                     outstr += ' ; ' + str(comments['on']).replace('\n', '\n; ')
                 outstr += "\n"
                 if 'after' in comments:
                     outstr += '; ' + str(comments['after']).replace('\n', '\n; ') + "\n"
-        outstr = outstr.replace('; \n', '\n')
+        
+        comments = self.get_comments(tail_comment)
+        if comments:
+            outstr += '; ' + str(comments['after']).replace('\n', '\n; ')
+
+        outstr = outstr.replace('; \n', '\n').strip()
         if tofile:
             with open(tofile, 'w') as f:
                 print(outstr, file=f, flush=True)
@@ -164,7 +175,10 @@ class MDPBase():
 
     def comment(self, option, comment, placement="on"):
         """Add a comment to the option"""
-        option, mdp_entry = self._get_mdp_entry(option)
+        if option == tail_comment:
+            placement = 'after'
+        else:
+            option, _ = self._get_mdp_entry(option)
 
         try:
             comment_dict = self.comments[option]
@@ -178,7 +192,8 @@ class MDPBase():
         comment_dict[placement] = str(comment)
 
     def get_comments(self, option):
-        option, mdp_entry = self._get_mdp_entry(option)
+        if option != tail_comment:
+            option, _ = self._get_mdp_entry(option)
 
         try:
             return self.comments[option]
@@ -210,11 +225,15 @@ class MDPBase():
                 except ValueError:
                     command, comment = line, ''
                 else:
-                    comment += ' '
+                    if comment.startswith(' '):
+                        comment = comment[1:]
+                    if comment == '':
+                        comment = ' '
                 match = self._re_mdp_line_match.match(command)
                 if match:
                     key = match.group('key')
                     value = match.group('value')
+                    key, _ = self._get_mdp_entry(key)
                     values[key] = value
                     if (comment or hangover_comment) and key not in comments:
                         comments[key] = {}
@@ -229,9 +248,9 @@ class MDPBase():
                     hangover_comment += '\n' + comment
             if hangover_comment:
                 try:
-                    comments[key]['after'] = hangover_comment.replace('\n','',1)
+                    comments[tail_comment]['after'] = hangover_comment.replace('\n','',1)
                 except KeyError:
-                    comments[key] = {'after': hangover_comment.replace('\n','',1)}
+                    comments[tail_comment] = {'after': hangover_comment.replace('\n','',1)}
                 except NameError:
                     raise ValueError("Can't handle a comment without an actual MDP entry")
 
@@ -242,16 +261,22 @@ class MDPBase():
                 self.comment(key, comment, placement)
 
     @classmethod
-    def add_obsolete(cls, name, docstring='Obsolete'):
-        obs_dict = ReadOnlyDict({
-            "docstring": docstring, 
-            "options": OrderedDict(),
-            "default": 'Obsolete',
-            "units": None
-        })
+    def add_obsolete(cls, name, newname=None, docstring='Obsolete'):
+        if newname:
+            _, obs_dict = cls._get_mdp_entry(newname)
+        else:
+            obs_dict = ReadOnlyDict({
+                "docname": name, 
+                "docstring": docstring, 
+                "options": OrderedDict(),
+                "default": 'Obsolete',
+                "units": None
+            })
         try:
             cls._get_mdp_entry(name)
         except AttributeError:
+            name = process_name(name)
+            cls.obsoletes.add(name)
             cls.options[name] = obs_dict
         else:
             raise ValueError('MDP option {} already exists.'.format(name))
@@ -264,3 +289,6 @@ gmxdocs_path = os.path.dirname(__file__) + "/gmxdocs"
 
 MDP20181 = MDPBase.create_subclass_from_doc('MDP20181', '{}/2018.1/mdp-options.rst'.format(gmxdocs_path))
 MDP20181.add_obsolete('title')
+MDP20181.add_obsolete('nstxtcout', 'nstxout-compressed')
+MDP20181.add_obsolete('xtc-precision', 'compressed-x-precision')
+MDP20181.add_obsolete('xtc-grps', 'compressed-x-grps')
