@@ -1,2 +1,2 @@
-# PyMDTools
-Random little tools for MD analysis
+# JupyterJoy
+Random little tools for MD analysis in Jupyter notebooks
