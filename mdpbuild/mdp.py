@@ -109,6 +109,12 @@ class MDPBase():
         except KeyError:
             pass
 
+    def __dir__(self):
+        out = super().__dir__()
+        opts = self.options.items()
+        out += [v['docname'] for k,v in opts if k not in self.obsoletes]
+        return out
+
     @classmethod
     def _get_mdp_entry(cls, name):
         """Return the options dict entry for name"""
