@@ -20,12 +20,13 @@ from bokeh.io import push_notebook, output_notebook
 import nglview as nv
 import traitlets as tl
 import traittypes as tt
-from copy import copy
+from copy import copy, deepcopy
 from bokeh.palettes import colorblind 
 import numpy as np
 from itertools import zip_longest
 from mdtraj import Trajectory
 from pandas import DataFrame
+from collections import Mapping
 
 cds_hack = {'outwidget': widgets.Output()}
 
@@ -82,6 +83,7 @@ class SeleNGLWidget(nv.NGLWidget):
         self.original_trajectory = orig
         super().__init__(*args, **kwargs)
         self._current_ind = None
+        self._colour = None
 
         # Make widgets resize sanely:
         self._remote_call("setSize", target='Widget',
@@ -241,7 +243,7 @@ class FrameLinkedPlot(widgets.Box):
     _reuse_colvars = tl.Bool(read_only=True)
 
     def_button_layout = widgets.Layout(height='30px')
-    def_view_layout   = widgets.Layout(width='250px', height='300px', flex='0 0 auto')
+    def_view_layout   = dict(width='250px', height='300px', flex='0 0 auto')
     def_figure_layout = widgets.Layout(width='400', height='550')
     def_box_layout    = widgets.Layout(display='flex',
                                     flex_flow='column wrap',
@@ -265,12 +267,13 @@ class FrameLinkedPlot(widgets.Box):
         else:
             mdtrajs = list(mdtraj_trajectories)
 
-        if isinstance(colvars, DataFrame):
+        if isinstance(colvars, DataFrame) or isinstance(colvars, Mapping):
             cvs = [colvars]
         else:
             cvs = list(colvars)
 
-        if len(mdtrajs) != 1 and len(cvs) != len(mdtrajs):
+        if len(mdtrajs) != 1 and len(cvs) != len(mdtrajs) and len(ploty) != len(mdtrajs):
+            print(len(mdtrajs), len(cvs), len(ploty))
             raise ValueError("Should have either 1 mdtraj trajectory, or one for every colvar")
 
         # ploty wasn't given to super, so it's currently the default per the traitlet
@@ -364,7 +367,7 @@ class FrameLinkedPlot(widgets.Box):
             palette = colorblind['Colorblind'][3]
         palette = palette[::-1]
 
-        view_layout = copy(self.def_view_layout)
+        view_layout = widgets.Layout(**self.def_view_layout)
         if len(mdtraj_trajectories) == 1:
             view_layout.width='500px'
             view_layout.height='600px'
@@ -411,8 +414,10 @@ class FrameLinkedPlot(widgets.Box):
             
             if traj is not None:
                 view = show_mdtraj(traj, gui=False)
-                view.clear_representations()
-                view.add_cartoon(color=colour)
+                view._colour = colour
+                if len(traj.top.select('protein')):
+                    view.clear_representations()
+                    view.add_cartoon(selection='polymer', color=colour)
                 view.frame_stride = stride
                 view.layout = view_layout
                 view._set_sync_camera()
@@ -456,7 +461,17 @@ def plot_vs_time(toplot, df, traj, timeaxis='Time', **kwargs):
         df_time = df[timeaxis]
     except KeyError:
         # Dict or dataframe or similar
-        df[timeaxis] = traj.time
+        try:
+            df[timeaxis] = traj.time
+        except AttributeError:
+            try:
+                times = [t.time for t in traj.values()]
+            except AttributeError:
+                times = [t.time for t in traj]
+            for t in times:
+                if not np.isclose(times[0], t).all():
+                    raise ValueError("All trajs must have same times!")
+            df[timeaxis] = times[0]
     except (IndexError, TypeError):
         # Array or list or similar
         try: 
@@ -473,12 +488,28 @@ def plot_vs_time(toplot, df, traj, timeaxis='Time', **kwargs):
     if 'title' not in kwargs:
         kwargs['title'] = kwargs['ploty_label'] + " over time"
     
+    if isinstance(toplot, str):
+        plotys = toplot
+        trajs = traj
+    else:
+        try:
+            plotys = list(toplot)
+        except TypeError:
+            plotys = toplot
+            trajs = traj
+        else:
+            try:
+                trajs = [traj[k] for k in plotys]
+            except:
+                trajs = traj
+
+
     
     linkwidg = FrameLinkedPlot(colvars=df, 
-                               mdtraj_trajectories=traj, 
+                               mdtraj_trajectories=trajs, 
                                plotx_label='Time (ps)', 
                                plotx=timeaxis,
-                               ploty=toplot,
+                               ploty=plotys,
                                **kwargs)
 
     return linkwidg
