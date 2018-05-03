@@ -13,7 +13,7 @@ from PyMDTools.brokeh import cds_hack
 """
 from __future__ import print_function
 import ipywidgets as widgets
-from bokeh.models import ColumnDataSource, CustomJS, HoverTool, Range1d
+from bokeh.models import ColumnDataSource, CustomJS, HoverTool, Range1d, Span
 from bokeh.plotting import figure, show
 from bokeh.plotting.figure import Figure
 from bokeh.io import push_notebook, output_notebook
@@ -72,12 +72,9 @@ def nb_column_data_source(*args, **kwargs):
 
 @widgets.register()
 class SeleNGLWidget(nv.NGLWidget):
-    """Wrapper widget for NGLWidget that can be given selections of frames
-
-    frame_stride: The frame in the selected list corresponds to a frame
-    in the trajectory with this factor"""
+    """Wrapper widget for NGLWidget that can be given selections of frames"""
     selected = tl.Dict()
-    frame_stride = tl.Integer()
+    # frame_stride = tl.Integer()
     
     def __init__(self, *args, orig=None, **kwargs):
         self.original_trajectory = orig
@@ -92,7 +89,7 @@ class SeleNGLWidget(nv.NGLWidget):
     @tl.observe('selected', type=tl.All)
     def _new_selection(self, change):
         """Update the current frame when a new selection is set"""
-        self.update()
+        self.update()       
         
     def link_to_bokeh_ds(self, datasource):
         """Link this widget to an existing datasource with the appropriate callback"""
@@ -115,14 +112,14 @@ class SeleNGLWidget(nv.NGLWidget):
         """Reset the frame to the first in the selection"""
         self._current_ind = 0
         try:
-            self.frame = self.selected['indices'][0] * self.frame_stride
+            self.frame = self.selected['indices'][0] # * self.frame_stride
         except IndexError:
             pass
         
     def selected_iter(self):
         """Generator to iterate over selected frames"""
         for frame in self.selected['indices']:
-            yield frame * self.frame_stride
+            yield frame # * self.frame_stride
             
     def next_selected(self):
         """Display the next frame in the selected list"""
@@ -138,9 +135,9 @@ class SeleNGLWidget(nv.NGLWidget):
                 self._current_ind = 0
                 idx = self.selected['indices'][self._current_ind]
             else:
-                idx = self.frame // self.frame_stride
+                idx = self.frame # // self.frame_stride
         
-        self.frame = idx * self.frame_stride
+        self.frame = idx # * self.frame_stride
         return self.frame
 
 def show_mdtraj(mdtraj_trajectory, **kwargs):
@@ -174,6 +171,7 @@ class BokehWrapper(widgets.Output):
     def __init__(self, figure, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.set_trait('figure', figure)
+        self.nbhandle = None
         if self.showing:
             self.refresh()
 
@@ -195,7 +193,10 @@ class BokehWrapper(widgets.Output):
         self.clear_output()
         self._set_size_from_layout()
         with self:
-            _ = show(self.figure, notebook_handle=True)
+            self.nbhandle = show(self.figure, notebook_handle=True)
+
+    def push_notebook(self, *args, **kwargs):
+        push_notebook(handle=self.nbhandle, *args, **kwargs)
 
     def __repr__(self):
         return "BokehWrapper({}, ...)".format(self.figure)
@@ -249,7 +250,7 @@ class FrameLinkedPlot(widgets.Box):
                                     flex_flow='column wrap',
                                     height='650px',
                                     width='100%',
-                                    align_items='center')
+                                    align_items='flex-start')
 
     def __init__(self, 
         colvars, 
@@ -299,6 +300,8 @@ class FrameLinkedPlot(widgets.Box):
         plotx = self.plotx
         ploty = self.ploty
 
+        self._vlines = {}
+
         TOOLS="crosshair,pan,zoom_in,zoom_out,box_zoom,box_select,undo,reset,"
 
         hover = HoverTool(tooltips=[
@@ -332,7 +335,6 @@ class FrameLinkedPlot(widgets.Box):
         if len(cvs) == 1 or len(cvs) == len(mdtrajs):
             p.legend.visible = False
 
-        self.bokeh.show()
 
         self.set_trait('views', views)
         self.set_trait('sources', sources)
@@ -347,7 +349,8 @@ class FrameLinkedPlot(widgets.Box):
 
         button.on_click(self._on_button_clicked)
 
-        self.children =tuple([self.bokeh, button] + self.views)
+        self.children =tuple(self.views + [self.bokeh, button])
+        self.bokeh.show()
 
     def _on_button_clicked(self, b):
         for view in self.views:
@@ -413,15 +416,23 @@ class FrameLinkedPlot(widgets.Box):
             colour = palette[n-1]
             
             if traj is not None:
-                view = show_mdtraj(traj, gui=False)
+                view = show_mdtraj(traj[::stride], gui=False)
+                view.observe(self._update_frame, names=['frame']), 
                 view._colour = colour
                 if len(traj.top.select('protein')):
                     view.clear_representations()
                     view.add_cartoon(selection='polymer', color=colour)
-                view.frame_stride = stride
+                # view.frame_stride = stride
                 view.layout = view_layout
                 view._set_sync_camera()
                 views.append(view)
+                vline = Span(
+                    location=view.frame * traj.timestep * stride + traj.time[0],
+                    dimension='height',
+                    line_color=colour
+                )
+                self._vlines[view] = vline
+                p.add_layout(vline)
 
             view.link_to_bokeh_ds(source)
             
@@ -442,6 +453,16 @@ class FrameLinkedPlot(widgets.Box):
         return (view.original_trajectory for view in self.views)
 
     @property
+    def traj(self):
+        traj_list = list(self.mdtraj_trajectories)
+        first_traj = trajlist.pop()
+        for traj in traj_list:
+            if traj is not first_traj:
+                raise ValueError("FrameLinkedPlot has multiple trajectories")
+        return first_traj
+            
+
+    @property
     def view(self):
         if len(self.views) == 1:
             return self.views[0]
@@ -454,6 +475,18 @@ class FrameLinkedPlot(widgets.Box):
             return self.sources[0]
         else:
             raise ValueError("FrameLinkedPlot has multiple sources")
+
+    def _update_frame(self, changes):
+        # selections = [deepcopy(source.selected['1d']) for source in self.sources]
+        view = changes['owner']
+        new_frame = changes['new']
+        traj = view.original_trajectory
+        vline = self._vlines[view]
+        vline.location = traj.timestep * new_frame + traj.time[0]
+        # for sele, src in zip(selections, self.sources):
+        #     src.selected['1d'] = sele
+        self.bokeh.refresh()
+
     
 def plot_vs_time(toplot, df, traj, timeaxis='Time', **kwargs):
     """Plot df's columns with headings in toplot against time"""
