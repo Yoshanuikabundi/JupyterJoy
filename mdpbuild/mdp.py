@@ -4,6 +4,8 @@ import os
 import re
 from numbers import Number
 from copy import copy, deepcopy
+from ..pbash import *
+import mdtraj as md
 
 tail_comment = "__TAIL_COMMENT__"
 
@@ -286,6 +288,42 @@ class MDPBase():
             cls.options[name] = obs_dict
         else:
             raise ValueError('MDP option {} already exists.'.format(name))
+
+    def setup_sim(self, name, structure, topology, **kwargs):
+        try:
+            strucname = "{}_start.pdb".format(name)
+            structure.save(strucname)
+        except AttributeError:
+            strucname = str(structure)
+
+        self.write(tofile='{}.mdp'.format(name))
+
+        kwargs.setdefault('c', strucname)
+        kwargs.setdefault('p', topology)
+        kwargs.setdefault('o', name)
+        kwargs.setdefault('f', name)
+
+        gromppline = "gmx grompp "
+        gromppline += " ".join(["-{} {}".format(k,v) for k,v in kwargs.items()])
+
+        ip = get_ipython()
+        pb = ip.find_magic('pb')
+        pb(gromppline)
+        return "gmx mdrun -v -deffnm {}".format(name)
+
+    def run_sim(self, name, *args, **kwargs):
+        mdrunline = self.setup_sim(name, *args, **kwargs)
+
+        ip = get_ipython()
+        pb = ip.find_magic('pb')
+        pb(mdrunline)
+
+        traj = md.load("{}.xtc".format(name), top="{}.gro".format(name))
+        return traj
+
+
+
+
 
 
 
