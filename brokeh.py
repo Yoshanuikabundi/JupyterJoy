@@ -27,6 +27,7 @@ from itertools import zip_longest
 from mdtraj import Trajectory
 from pandas import DataFrame
 from collections import Mapping
+from time import sleep
 
 cds_hack = {'outwidget': widgets.Output()}
 
@@ -139,6 +140,11 @@ class SeleNGLWidget(nv.NGLWidget):
         
         self.frame = idx # * self.frame_stride
         return self.frame
+
+    def display_image(self, *args, **kwargs):
+        self.render_image(*args, **kwargs)
+        sleep(1)
+        return self._display_image()
 
 def show_mdtraj(mdtraj_trajectory, **kwargs):
     '''Show mdtraj trajectory.
