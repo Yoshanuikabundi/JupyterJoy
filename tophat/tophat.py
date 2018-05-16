@@ -9,6 +9,7 @@ class Topology:
     def __init__(self, fname=None):
         self.unparsed = []
         self.molecules = MoleculesSection()
+        self.includes = []
         if fname:
             with open(fname) as f:
                 self.read(f)
@@ -16,7 +17,14 @@ class Topology:
             self.molecules = MoleculesSection()
 
     def __str__(self):
-        return '\n'.join(self.unparsed + ['', str(self.molecules)])
+        out = [f"#include {i}" for i in self.includes]
+        out += ['']
+        out += self.unparsed
+        out += ['']
+        out += [str(self.molecules)]
+        out += [''] # I am very proud of this line
+        out = [i for n,i in enumerate(out) if i != "" or out[n-1] != ""] 
+        return '\n'.join(out)
 
 
     def read(self, f):
@@ -50,10 +58,15 @@ class Topology:
             self.molecules.append(name, count)
 
     def _read_default(self, line, comments):
-        if comments:
-            return self.unparsed.append(';'.join([line] + comments))
+        if line[:9] == "#include ":
+            self.includes.append(line[9:])
+            return 
+        elif comments:
+            self.unparsed.append(';'.join([line] + comments))
+            return
         else:
-            return self.unparsed.append(line)
+            self.unparsed.append(line)
+            return
 
     
 
