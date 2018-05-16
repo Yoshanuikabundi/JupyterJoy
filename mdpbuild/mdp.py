@@ -21,13 +21,15 @@ class MDPBase():
     """Base class for creating MDP files"""
     obsoletes = set([])
     @classmethod
-    def create_subclass_from_doc(cls, name, docpath):
+    def create_subclass_from_doc(cls, name, docpath, gromppcmd="gmx grompp", mdruncmd="gmx mdrun"):
         """Create an MDP class from a mdp-options.rst file distributed with GROMACS"""
         mdp_entries, doc = parse_rst_file(docpath)
         attr = {
             'options': mdp_entries,
             'doc': doc,
-            'obsoletes': copy(cls.obsoletes)
+            'obsoletes': copy(cls.obsoletes),
+            'gromppcmd': gromppcmd,
+            'mdruncmd': mdruncmd
         }
         return type(name, (cls,), attr)
 
@@ -303,13 +305,13 @@ class MDPBase():
         kwargs.setdefault('o', name)
         kwargs.setdefault('f', name)
 
-        gromppline = "gmx grompp "
+        gromppline = self.gromppcmd + " "
         gromppline += " ".join(["-{} {}".format(k,v) for k,v in kwargs.items()])
 
         ip = get_ipython()
         pb = ip.find_magic('pb')
         pb(gromppline)
-        return "gmx mdrun -v -deffnm {}".format(name)
+        return "{} -v -deffnm {}".format(self.mdruncmd, name)
 
     def run_sim(self, name, *args, **kwargs):
         mdrunline = self.setup_sim(name, *args, **kwargs)
@@ -318,8 +320,11 @@ class MDPBase():
         pb = ip.find_magic('pb')
         pb(mdrunline)
 
-        traj = md.load("{}.xtc".format(name), top="{}.gro".format(name))
-        return traj
+        try:
+            traj = md.load("{}.xtc".format(name), top="{}.gro".format(name))
+            return traj
+        except OSError:
+            return None
 
 
 
