@@ -85,15 +85,27 @@ def test_ListView_get_set_del():
     assert a == b == aview
     assert len(a) == len(b) == len(aview)
 
-def test_ListView_bigwun():
-    a = list(range(1000))
-    b = list(range(1000))
-    aview = TrivialListView(a)
+def test_SliceListView_bigwun():
+    a = list(range(1_000_000))
+    b = list(range(1_000_000))
+    start, stop, step = None, None, 100_000
+    aview = SliceListView(a, start, stop, step)
 
-    del aview[500]
-    del b[500]
+    idx = 5
+    del aview[idx]
+    del b[idx*step]
 
-    assert a == b == aview
+    assert a == b 
+    assert a[::step] == b[::step] == aview
+    assert len(a[::step]) == len(b[::step]) == len(aview)
+
+    idx = 7
+    del a[idx*step]
+    del b[idx*step]
+
+    assert a == b 
+    assert a[::step] == b[::step] == aview
+    assert len(a[::step]) == len(b[::step]) == len(aview)
 
 
 class TrivialValidateListView(ValidateListView):

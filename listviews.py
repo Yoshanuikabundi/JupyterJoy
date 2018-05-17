@@ -1,5 +1,6 @@
 from collections.abc import MutableSequence
 from abc import abstractmethod
+from contextlib import suppress
 import re
 
 class ListView(MutableSequence):
@@ -61,6 +62,37 @@ class ValidateListView(ListView):
 
     def __filtered__(self):
         return ((i,v) for i,v in enumerate(self.alist) if self.__filter__(v))
+
+
+class SliceListView(ListView):
+    def __init__(self, alist, *args, **kwargs):
+        if 'stop' in kwargs:
+            start = kwargs.pop('start', 0)
+            stop  = kwargs.pop('stop')
+            step  = kwargs.pop('step', 1)
+        elif len(args) >= 3:
+            start, stop, step, *args = args
+        elif len(args) == 2:
+            start, stop = args
+            step, args  = 1, []
+        elif len(args) == 1:
+            stop,  = args
+            start, step, args  = 0, 1, []
+        else:
+            raise ValueError("Need more arguments!")
+
+        super().__init__(alist, *args, **kwargs)
+
+        self.slice = slice(start, stop, step)
+
+    def __filtered__(self):
+        indices = self.slice.indices(len(self.alist))
+        values = self.alist.__getitem__(self.slice)
+        return zip(range(*indices), values)
+
+    def __repr__(self):
+        return f'SliceListView({self.alist}, {self.slice.start}, {self.slice.stop}, {self.slice.step})'
+
 
 class REListView(ValidateListView):
     def __init__(self, alist, regex, *args, **kwargs):
