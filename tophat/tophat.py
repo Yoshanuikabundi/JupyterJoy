@@ -1,15 +1,15 @@
 from .molsect import MoleculesSection
 from .moltype import MoleculeType
 import re
+from ..listviews import REListView
 
 _re_directive = re.compile(r'\[ +([a-zA-Z0-9_]+) +\]')
-
+_re_hashcommand = re.compile(r'\#.+')
 
 class Topology:
     def __init__(self, fname=None):
         self.unparsed = []
         self.molecules = MoleculesSection()
-        self.hashcommands = []
         self.name = ''
         if fname:
             with open(fname) as f:
@@ -21,8 +21,7 @@ class Topology:
         if not self.name:
             raise ValueError("GROMACS topology must have a name!")
 
-        out  = list(self.hashcommands)
-        out += ['']
+        out  = ['']
         out += self.unparsed
         out += ['']
         out += ['[ system ]']
@@ -35,6 +34,9 @@ class Topology:
         out = [i for n,i in enumerate(out) if i != "" or out[n-1] != ""] 
         return '\n'.join(out)
 
+    @property
+    def hashcommands(self):
+        return REListView(self.unparsed, _re_hashcommand)
 
     def read(self, f):
         current_directive = None
@@ -43,6 +45,7 @@ class Topology:
             line,*comments = line.split(sep=';', maxsplit=1)
             # Strip trailing and leading whitespace
             line = line.strip()
+            comments = [s.strip() for s in comments]
 
             # We need to set up our directives now
             casedict = {
@@ -78,11 +81,8 @@ class Topology:
             self.molecules.append(name, count)
 
     def _read_default(self, line, comments):
-        if line[:1] == "#":
-            self.hashcommands.append(line)
-            return 
-        elif comments:
-            self.unparsed.append(';'.join([line] + comments))
+        if comments:
+            self.unparsed.append(' ; '.join([line] + comments))
             return
         else:
             self.unparsed.append(line)

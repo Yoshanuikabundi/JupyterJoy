@@ -97,7 +97,7 @@ def test_Topology_hashcommands():
     top.read(strlist)
 
     assert top.hashcommands == [
-        '#include "./martini_v2.2refP.itp"',
+        '#include "./martini_v2.2refP.itp" ; comment',
         "#define RUBBERBANDS",
         "#include './martini_protein.itp'",
         "#include martini_v2.0_ions.itp"
@@ -105,9 +105,10 @@ def test_Topology_hashcommands():
     top.hashcommands.append('#include martini_v2.0_sugars.itp')
 
     compstr = '\n'.join([
-        '#include "./martini_v2.2refP.itp"',
+        '#include "./martini_v2.2refP.itp" ; comment',
         "#define RUBBERBANDS",
         "#include './martini_protein.itp'",
+        "",
         "#include martini_v2.0_ions.itp",
         "#include martini_v2.0_sugars.itp",
         "",
@@ -131,7 +132,7 @@ def test_Topology_hashcommands():
 
 def test_Topology_system():
     strlist = [
-        '#include "./martini_v2.2refP.itp" ; comment',
+        '#include "./martini_v2.2refP.itp"; comment',
         "#define RUBBERBANDS",
         "#include './martini_protein.itp'",
         "",
@@ -157,9 +158,10 @@ def test_Topology_system():
     top.name = "Test system - microbilayer!"
 
     compstr = '\n'.join([
-        '#include "./martini_v2.2refP.itp"',
+        '#include "./martini_v2.2refP.itp" ; comment',
         "#define RUBBERBANDS",
         "#include './martini_protein.itp'",
+        "",
         "#include martini_v2.0_ions.itp",
         "",
         "[ system ]",
@@ -180,7 +182,7 @@ def test_Topology_system():
     assert str(top) == compstr
 
     strlist = [
-        '#include "./martini_v2.2refP.itp"',
+        '#include "./martini_v2.2refP.itp" ; comment',
         "#define RUBBERBANDS",
         "#include './martini_protein.itp'",
         "",
