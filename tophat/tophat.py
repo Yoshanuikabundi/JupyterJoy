@@ -4,25 +4,24 @@ import re
 from ..listviews import REListView
 
 _re_directive = re.compile(r'\[ +([a-zA-Z0-9_]+) +\]')
-_re_hashcommand = re.compile(r'\#.+')
+_re_includes = re.compile(r'\#include .+')
+_re_defines = re.compile(r'\#define .+')
 
 class Topology:
     def __init__(self, fname=None):
         self.unparsed = []
-        self.molecules = MoleculesSection()
         self.name = ''
+        self.molecules = MoleculesSection()
+
         if fname:
             with open(fname) as f:
                 self.read(f)
-        else:
-            self.molecules = MoleculesSection()
 
     def __str__(self):
         if not self.name:
             raise ValueError("GROMACS topology must have a name!")
 
-        out  = ['']
-        out += self.unparsed
+        out = list(self.unparsed)
         out += ['']
         out += ['[ system ]']
         out += ['; name']
@@ -35,8 +34,12 @@ class Topology:
         return '\n'.join(out)
 
     @property
-    def hashcommands(self):
-        return REListView(self.unparsed, _re_hashcommand)
+    def includes(self):
+        return REListView(self.unparsed, _re_includes)
+
+    @property
+    def defines(self):
+        return REListView(self.unparsed, _re_defines)
 
     def read(self, f):
         current_directive = None

@@ -96,13 +96,13 @@ def test_Topology_hashcommands():
     top = Topology()
     top.read(strlist)
 
-    assert top.hashcommands == [
+    assert top.includes == [
         '#include "./martini_v2.2refP.itp" ; comment',
-        "#define RUBBERBANDS",
         "#include './martini_protein.itp'",
         "#include martini_v2.0_ions.itp"
     ]
-    top.hashcommands.append('#include martini_v2.0_sugars.itp')
+    assert top.defines == ["#define RUBBERBANDS"]
+    top.includes.append('#include martini_v2.0_sugars.itp')
 
     compstr = '\n'.join([
         '#include "./martini_v2.2refP.itp" ; comment',
