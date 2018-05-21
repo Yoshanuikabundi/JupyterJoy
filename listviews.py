@@ -1,9 +1,5 @@
 from collections.abc import MutableSequence
-<<<<<<< HEAD
 from abc import abstractmethod, ABCMeta
-=======
-from abc import abstractmethod
->>>>>>> 501c13d80c57e1b10caf0be3fa9d88f977a0e4a5
 from contextlib import suppress
 import re
 
@@ -254,7 +250,6 @@ class MutateListView(ListView):
     def indices(self):
         return super().indices
 
-
 class SliceListView(ListView):
     def __init__(self, alist, *args, **kwargs):
         if 'stop' in kwargs:
@@ -280,38 +275,6 @@ class SliceListView(ListView):
     def indices(self):
         start, stop, step = self.slice.indices(len(self.alist))
         return range(start, stop, step)
-
-
-
-class SliceListView(ListView):
-    def __init__(self, alist, *args, **kwargs):
-        if 'stop' in kwargs:
-            start = kwargs.pop('start', 0)
-            stop  = kwargs.pop('stop')
-            step  = kwargs.pop('step', 1)
-        elif len(args) >= 3:
-            start, stop, step, *args = args
-        elif len(args) == 2:
-            start, stop = args
-            step, args  = 1, []
-        elif len(args) == 1:
-            stop,  = args
-            start, step, args  = 0, 1, []
-        else:
-            raise ValueError("Need more arguments!")
-
-        super().__init__(alist, *args, **kwargs)
-
-        self.slice = slice(start, stop, step)
-
-    def __filtered__(self):
-        indices = self.slice.indices(len(self.alist))
-        values = self.alist.__getitem__(self.slice)
-        return zip(range(*indices), values)
-
-    def __repr__(self):
-        return f'SliceListView({self.alist}, {self.slice.start}, {self.slice.stop}, {self.slice.step})'
-
 
 class REListView(ValidateListView):
     def __init__(self, alist, regex, *args, **kwargs):

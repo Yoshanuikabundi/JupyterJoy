@@ -128,7 +128,6 @@ def test_ListView_get_set_del():
     assert a == b == aview
     assert len(a) == len(b) == len(aview)
 
-<<<<<<< HEAD
 def slices():
     numbers = [0, 1, 2, 3, 9, 10, 11, 12, 20]
     for start in numbers:
@@ -244,11 +243,6 @@ def test_ListView_setslicing():
 def test_SliceListView_bigwun():
     a = list(range(1_100_000))
     b = list(range(1_100_000))
-=======
-def test_SliceListView_bigwun():
-    a = list(range(1_000_000))
-    b = list(range(1_000_000))
->>>>>>> 501c13d80c57e1b10caf0be3fa9d88f977a0e4a5
     start, stop, step = None, None, 100_000
     aview = SliceListView(a, start, stop, step)
 
