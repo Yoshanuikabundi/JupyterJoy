@@ -3,6 +3,7 @@ from abc import abstractmethod, ABCMeta
 from contextlib import suppress
 import re
 
+
 class ListViewMeta(ABCMeta):
     def __init__(cls, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -12,12 +13,13 @@ class ListViewMeta(ABCMeta):
     def SubView(cls):
         if cls._SubView is None:
             cls._SubView = type(
-                f"{cls.__name__}.SubView", 
+                f"{cls.__name__}.SubView",
                 (cls, SubView),
                 {}
             )
 
         return cls._SubView
+
 
 class ListView(MutableSequence, metaclass=ListViewMeta):
     def __init__(self, alist, *args, **kwargs):
@@ -40,10 +42,10 @@ class ListView(MutableSequence, metaclass=ListViewMeta):
         This is a bit tricky. ListView classes automatically create a
         class for their own subviews called cls.SubView. These are
         returned when a slice is requested of the ListView. cls.SubView
-        is a subclass of the ListView class itself as well as 
+        is a subclass of the ListView class itself as well as
         ExplicitListView so it can be given arbitrary indices. What this
-        means is that when a ListView creates a subview , it needs to be 
-        able to provide all the arguments it would need to create a new 
+        means is that when a ListView creates a subview , it needs to be
+        able to provide all the arguments it would need to create a new
         instance of its own class. This method lets it do that.
 
         When a subclass of ListView changes the argument signature of its
@@ -73,10 +75,13 @@ class ListView(MutableSequence, metaclass=ListViewMeta):
 
         start, stop, step = key.start, key.stop, key.step
         if len(value) == len(idx):
-            for i,v in enumerate(value):
+            for i, v in enumerate(value):
                 view[i] = v
         elif step not in (1, None):
-            raise ValueError(f"attempt to assign sequence of size {len(value)} to extended slice of size {len(idx)}")
+            raise ValueError(
+                f"attempt to assign sequence of size {len(value)} "
+                f"to extended slice of size {len(idx)}"
+            )
         else:
             # Standard slice
             if start is None:
@@ -118,7 +123,7 @@ class ListView(MutableSequence, metaclass=ListViewMeta):
         if isinstance(idx, int):
             del self.alist[idx]
         else:
-            for n,i in enumerate(sorted(set(idx))):
+            for n, i in enumerate(sorted(set(idx))):
                 del self.alist[i-n]
         return idx
 
@@ -147,6 +152,7 @@ class ListView(MutableSequence, metaclass=ListViewMeta):
         values = type(self.indices)(self)
         return f"<{clsname} object bearing {values}>"
 
+
 class ExplicitListView(ListView):
     def __init__(self, alist, indices, *args, **kwargs):
         super().__init__(alist, *args, **kwargs)
@@ -166,28 +172,28 @@ class ExplicitListView(ListView):
 
     def __getitem__(self, key):
         if isinstance(key, slice):
-            raise ValueError("ExplicitListView does not support slicing (yet?)")
+            raise ValueError("ExplicitListView does not support slicing (yet)")
         return super().__getitem__(key)
 
     def __setitem__(self, key, value):
         if isinstance(key, slice):
-            raise ValueError("ExplicitListView does not support slicing (yet?)")
+            raise ValueError("ExplicitListView does not support slicing (yet)")
         super().__setitem__(key, value)
 
     def __delitem__(self, key):
         if isinstance(key, slice):
-            raise ValueError("ExplicitListView does not support slicing (yet?)")
+            raise ValueError("ExplicitListView does not support slicing (yet)")
         super().__delitem__(key)
 
     def insert(self, key, value):
         if isinstance(key, slice):
-            raise ValueError("ExplicitListView does not support slicing (yet?)")
+            raise ValueError("ExplicitListView does not support slicing (yet)")
         super().insert(key, value)
-
 
 
 class SubView(ExplicitListView):
     pass
+
 
 class ValidateListView(ListView):
     @abstractmethod
@@ -206,7 +212,7 @@ class ValidateListView(ListView):
         else:
             self._check_validation(value)
         super().__setitem__(key, value)
-        
+
     def insert(self, key, value):
         self._check_validation(value)
         super().insert(key, value)
@@ -216,6 +222,7 @@ class ValidateListView(ListView):
         validate = self.validate
         alist = self.alist
         return tuple(i for i in super().indices if validate(alist[i]))
+
 
 class MutateListView(ListView):
     @abstractmethod
@@ -250,20 +257,21 @@ class MutateListView(ListView):
     def indices(self):
         return super().indices
 
+
 class SliceListView(ListView):
     def __init__(self, alist, *args, **kwargs):
         if 'stop' in kwargs:
             start = kwargs.pop('start', 0)
-            stop  = kwargs.pop('stop')
-            step  = kwargs.pop('step', 1)
+            stop = kwargs.pop('stop')
+            step = kwargs.pop('step', 1)
         elif len(args) >= 3:
             start, stop, step, *args = args
         elif len(args) == 2:
             start, stop = args
-            step, args  = 1, []
+            step, args = 1, []
         elif len(args) == 1:
             stop,  = args
-            start, step, args  = 0, 1, []
+            start, step, args = 0, 1, []
         else:
             raise ValueError("Need more arguments!")
 
@@ -275,6 +283,7 @@ class SliceListView(ListView):
     def indices(self):
         start, stop, step = self.slice.indices(len(self.alist))
         return range(start, stop, step)
+
 
 class REListView(ValidateListView):
     def __init__(self, alist, regex, *args, **kwargs):
@@ -289,7 +298,7 @@ class REListView(ValidateListView):
     def create_subview(self, *args, **kwargs):
         """Create a view to return for slicing
 
-        I added a new required argument 'regex' to __init__, so I need 
+        I added a new required argument 'regex' to __init__, so I need
         to show REListView how to create a subview of itself. This is
         the method in which that happens."""
         return super().create_subview(regex=self.regex, *args, **kwargs)

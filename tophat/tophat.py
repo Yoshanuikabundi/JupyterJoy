@@ -1,5 +1,4 @@
 from .molsect import MoleculesSection
-from .moltype import MoleculeType
 import re
 from ..listviews import REListView
 
@@ -29,13 +28,16 @@ class Topology:
         out += ['']
         out += [str(self.molecules)]
         out += [''] # I am very proud of this line
-        
-        out = [i for n,i in enumerate(out) if i != "" or out[n-1] != ""] 
+
+        out = [i for n,i in enumerate(out) if i != "" or out[n-1] != ""]
         return '\n'.join(out)
 
     @property
     def includes(self):
         return REListView(self.unparsed, _re_includes)
+
+    def include(self, fn):
+        self.includes.append(f'#include "{fn}"')
 
     @property
     def defines(self):
@@ -79,9 +81,8 @@ class Topology:
             raise ValueError("Hashcommand after [ system ] directive not supported")
         if line:
             name, count = line.split()
-            name = MoleculeType(name)
             count = int(count)
-            self.molecules.append(name, count)
+            self.molecules.append((name, count))
 
     def _read_default(self, line, comments):
         if comments:
@@ -90,12 +91,3 @@ class Topology:
         else:
             self.unparsed.append(line)
             return
-
-    
-
-
-
-
-
-
-
