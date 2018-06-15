@@ -11,21 +11,23 @@ def make_martini_ndx(top, f=None):
         except KeyError:
             ndx[name] = indices
     ndx['system'] = [a.index+1 for a in top.atoms]
-    ndx['solvent'] = sorted(ndx.get('PW', []) 
-                            + ndx.get('W', []) 
-                            + ndx.get('WF', []) 
-                            + ndx.get('NA+', []) 
-                            + ndx.get('CL-', []) 
-                            + ndx.get('NC3+', []) 
-                            + ndx.get('CA+', [])
-                           )
+    ndx['solvent'] = sorted(
+        ndx.get('PW', [])
+        + ndx.get('W', [])
+        + ndx.get('WF', [])
+        + ndx.get('NA+', [])
+        + ndx.get('CL-', [])
+        + ndx.get('NC3+', [])
+        + ndx.get('CA+', [])
+    )
     ndx['non-solvent'] = [a.index+1 for a in top.atoms if a.index+1 not in ndx['solvent']]
-    if f: 
-        for k,v in ndx.items():
+    if f:
+        for k, v in ndx.items():
             f.write("[ {} ]\n".format(k))
-            for n,i in enumerate(v):
+            for n, i in enumerate(v):
                 f.write("{: >6} ".format(i))
-                if not (n+1)%5: f.write('\n')
+                if not (n+1) % 5:
+                    f.write('\n')
             f.write("\n\n")
     return ndx
 
@@ -36,16 +38,15 @@ class Generator():
     Just define __gen__ with at least one yield statement in a subclass!"""
     def __init__(self):
         self._gen = self.__gen__()
-        
+
     def __gen__(self):
         return NotImplemented
-    
+
     def __next__(self):
         return(next(self._gen))
-    
-        
 
-class BatchNGLViewRenderer(Generator): 
+
+class BatchNGLViewRenderer(Generator):
     """Helps render a bunch of images from an NGLView view
 
     When NGLView renders an image, python needs some time (and a new cell
@@ -74,33 +75,33 @@ class BatchNGLViewRenderer(Generator):
     Now just follow the instructions in the second cell! Output is also
     available as the `out` attribute of the instance, and is returned every
     time the instance is called.
-    """  
+    """
 
     def __init__(self, view, batch):
         super().__init__()
         self.view = view
         self.batch = dict(batch)
         self.out = {}
-                
+
     def __gen__(self):
         view = self.view
         batch = self.batch
         out = self.out
-        
+
         for name,kwargs in batch.items():
             prev_image_data = copy(view._image_data)
-            
+
             view.frame = kwargs.get("frame", view.frame)
             yield "Check that the view looks OK for {}, then execute this cell again.".format(name)
-            
+
             while view._image_data == prev_image_data:
                 view.render_image(**kwargs)
                 yield "Image (re-)rendered. Execute this cell again in a sec. If you see this a lot, try a longer sec!"
-                
+
             image = view._display_image()
             out[name] = image
-            
-        
+
+
     def __call__(self):
         try:
             msg = next(self)
@@ -108,4 +109,3 @@ class BatchNGLViewRenderer(Generator):
             msg = "All done! You can stop executing now."
         print(msg)
         return self.out
-
