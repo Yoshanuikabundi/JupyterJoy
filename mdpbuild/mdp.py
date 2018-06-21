@@ -4,8 +4,9 @@ import os
 import re
 from numbers import Number
 from copy import copy, deepcopy
-from ..pbash import *
+from JupyterJoy.pbash import *
 import mdtraj as md
+import shlex
 
 tail_comment = "__TAIL_COMMENT__"
 
@@ -33,13 +34,13 @@ class MDPBase():
         }
         return type(name, (cls,), attr)
 
-    def __init__(self, data=None):
-        super().__init__()
+    def __init__(self, data, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.__dict__['values'] = {}
         self.__dict__['comments'] = {}
         if data is None: return
 
-        try: 
+        try:
             with open(data) as f:
                 data = f.read()
         except (FileNotFoundError, TypeError, OSError):
@@ -85,7 +86,7 @@ class MDPBase():
         for val in itervalues:
             if not isinstance(val, Number):
                 raise AttributeError("{}.{} should be a Number expressed in units of {}, not {}".format(self, name, mdp_entry['units'], repr(value)))
-        return value_to_save 
+        return value_to_save
 
     def __setattr__(self, name, value):
         """Set the value of the setting, as long as its appropriate"""
@@ -99,7 +100,7 @@ class MDPBase():
         elif mdp_entry['options']:
             if process_name(value) in (process_name(v) for v in mdp_entry['options']):
                 self.values[name] = value
-            else: 
+            else:
                 raise AttributeError("Acceptable values for {}.{} are {}, not '{}'".format(self, name, list(mdp_entry['options']), value))
         else:
             self.values[name] = value
@@ -107,7 +108,7 @@ class MDPBase():
     def __delattr__(self, name):
         """Return a setting to its default value"""
         name, mdp_entry = self._get_mdp_entry(name)
-        
+
         try:
             del self.values[name]
         except KeyError:
@@ -162,7 +163,7 @@ class MDPBase():
         outstr = ""
         fmt = "{{: <{}}} = {{}}".format(keypad)
         for key,value,docname in out:
-                comments = self.get_comments(key) 
+                comments = self.get_comments(key)
                 if 'before' in comments:
                     outstr += '; ' + str(comments['before']).replace('\n', '\n; ') + "\n"
                 outstr += fmt.format(docname, value)
@@ -171,7 +172,7 @@ class MDPBase():
                 outstr += "\n"
                 if 'after' in comments:
                     outstr += '; ' + str(comments['after']).replace('\n', '\n; ') + "\n"
-        
+
         comments = self.get_comments(tail_comment)
         if comments:
             outstr += '; ' + str(comments['after']).replace('\n', '\n; ')
@@ -247,9 +248,9 @@ class MDPBase():
                     values[key] = value
                     if (comment or hangover_comment) and key not in comments:
                         comments[key] = {}
-                    if comment: 
+                    if comment:
                         comments[key]['on'] = comment
-                    if hangover_comment: 
+                    if hangover_comment:
                         comments[key]['before'] = hangover_comment.replace('\n','',1)
                         hangover_comment = ''
                 elif command:
@@ -276,8 +277,8 @@ class MDPBase():
             _, obs_dict = cls._get_mdp_entry(newname)
         else:
             obs_dict = ReadOnlyDict({
-                "docname": name, 
-                "docstring": docstring, 
+                "docname": name,
+                "docstring": docstring,
                 "options": OrderedDict(),
                 "default": 'Obsolete',
                 "units": None
@@ -293,12 +294,13 @@ class MDPBase():
 
     def setup_sim(self, name, structure, topology, **kwargs):
         try:
-            strucname = "{}_start.pdb".format(name)
+            strucname = f"{name}_start.pdb"
             structure.save(strucname)
         except AttributeError:
             strucname = str(structure)
 
-        self.write(tofile='{}.mdp'.format(name))
+        self.write(tofile=f'{name}.mdp')
+
 
         kwargs.setdefault('c', strucname)
         kwargs.setdefault('p', topology)
@@ -306,12 +308,12 @@ class MDPBase():
         kwargs.setdefault('f', name)
 
         gromppline = self.gromppcmd + " "
-        gromppline += " ".join(["-{} {}".format(k,v) for k,v in kwargs.items()])
+        gromppline += " ".join([f"-{k} {v}" for k,v in kwargs.items()])
 
         ip = get_ipython()
         pb = ip.find_magic('pb')
         pb(gromppline)
-        return "{} -v -deffnm {}".format(self.mdruncmd, name)
+        return f"{self.mdruncmd} -v -deffnm {name}"
 
     def run_sim(self, name, *args, **kwargs):
         mdrunline = self.setup_sim(name, *args, **kwargs)
@@ -326,17 +328,20 @@ class MDPBase():
         except OSError:
             return None
 
-
-
-
-
-
-
+    def extend_sim(self, name, time_ns, *args, **kwargs):
+        old_time_ns = self.nsteps * self.dt / 1000
+        self.set_time(self.dt*1000, time_ns)
+        mdrunline = self.setup_sim(self, name, *args, **kwargs)
+        self.set_time(self.dt*1000, old_time_ns)
+        return mdrunline + " -cpi"
 
 
 gmxdocs_path = os.path.dirname(__file__) + "/gmxdocs"
 
-MDP20181 = MDPBase.create_subclass_from_doc('MDP20181', '{}/2018.1/mdp-options.rst'.format(gmxdocs_path))
+MDP20181 = MDPBase.create_subclass_from_doc(
+    'MDP20181',
+    f'{gmxdocs_path}/2018.1/mdp-options.rst'
+)
 MDP20181.add_obsolete('title')
 MDP20181.add_obsolete('nstxtcout', 'nstxout-compressed')
 MDP20181.add_obsolete('xtc-precision', 'compressed-x-precision')
