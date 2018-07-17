@@ -174,3 +174,39 @@ def test_MoleculesSection_str():
         "water    12843"
     ])
     assert str(mol_sect3) == compstr
+
+def test_MoleculesSection_pop():
+    protein = "protein"
+    lipid_a = "lipid_a"
+    lipid_b = "lipid_b"
+    water = "water"
+    lst2 = [
+        (protein,   1),
+        (lipid_a,   2),
+        (lipid_b,   5),
+        (lipid_a,   2),
+        (lipid_b,   7)
+    ]
+    lst3 = lst2 + [(water, 12843)]
+    mol_sect2 = MoleculesSection(*lst2)
+    mol_sect3 = MoleculesSection(*lst3)
+    elem = mol_sect3.pop()
+    assert list(mol_sect3) == list(mol_sect2)
+    assert elem == (water, 12843)
+
+def test_MoleculesSection_clear():
+    protein = "protein"
+    lipid_a = "lipid_a"
+    lipid_b = "lipid_b"
+    water = "water"
+    lst3 = [
+        (protein,   1),
+        (lipid_a,   2),
+        (lipid_b,   5),
+        (lipid_a,   2),
+        (lipid_b,   7),
+        (water, 12843)
+    ]
+    mol_sect3 = MoleculesSection(*lst3)
+    mol_sect3.clear()
+    assert list(mol_sect3) == []

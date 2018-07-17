@@ -45,10 +45,7 @@ class MolSectEntry(Sequence):
         return f"MolSectEntry(name={self.name}, copies={self.copies})"
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, MolSectEntry):
-            return self is other
-        else:
-            return tuple(self) == other
+        return tuple(self) == other
 
     def __hash__(self) -> int:
         return hash([self.name, self.copies])
@@ -124,7 +121,7 @@ class MoleculesSection(MutableSequence):
     def __init__(self, *args: Tuple[str, int]) -> None:
         self.__init_done = False
 
-        self._entries: Sequence[MolSectEntry] = []
+        self._entries: MutableSequence[MolSectEntry] = []
         self._name2entries: Dict[str, Sequence[MolSectEntry]] = {}
 
         for idx, (name, copies) in enumerate(args):
@@ -201,21 +198,6 @@ class MoleculesSection(MutableSequence):
                 return _MolSectEntryList(entries)
 
     @overload
-    def _key_to_idx(self, key: slice) -> Sequence[int]:
-        pass
-
-    @overload
-    def _key_to_idx(self, key: int) -> int:
-        pass
-
-    def _key_to_idx(self, key):
-        entries = self[key]
-        try:
-            return (entry.idx for entry in entries)
-        except TypeError:
-            return entries.idx
-
-    @overload
     def __getitem__(self, key: int) -> MolSectEntry:
         pass
 
@@ -285,9 +267,14 @@ class MoleculesSection(MutableSequence):
 
     def __delitem__(self, key) -> None:
         entries = self._key_to_entries(key)
-        for entry in entries:
-            del self._entries[entry.idx]
-        self.update_name2idx()
+        if isinstance(entries, MolSectEntry):
+            idx = self._entries.index(entries)
+            del self._entries[idx]
+        else:
+            for entry in entries:
+                idx = self._entries.index(entry)
+                del self._entries[idx]
+        self.update_name2entries()
 
     def __len__(self):
         return len(self._entries)
