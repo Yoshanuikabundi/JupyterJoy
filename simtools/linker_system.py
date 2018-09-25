@@ -8,6 +8,10 @@ from scipy.spatial.distance import cdist, pdist
 from panedr import edr_to_df
 from tempfile import TemporaryDirectory
 import tarfile
+import scipy
+import time
+
+import sys
 
 from JupyterJoy.mdpbuild.mdp import MDP20181
 from JupyterJoy.tophat import Topology
@@ -277,11 +281,46 @@ class TopolWithItps(Topology):
             return None
 
 
+def align_to(a, b):
+    """Return a rotation matrix R such that Ra is parallel to b
+
+    from https://math.stackexchange.com/a/476311"""
+    norm = np.linalg.norm
+    # Convert to unit vectors
+    a = np.asarray(a) / norm(a)
+    b = np.asarray(b) / norm(b)
+
+    # Define the identity matrix
+    I = np.array([[1, 0, 0],
+                  [0, 1, 0],
+                  [0, 0, 1]])
+
+    # If the unit vectors are (anti)parallel, return the (negated)
+    # identity matrix
+    if (a == b).all():
+        return I
+
+    if (a == -b).all():
+        return -I
+
+    # Otherwise, use the magic from above
+
+    v = np.cross(a,b)
+    s = norm(v)
+    c = np.dot(a,b)
+
+    v_cross = np.array([[    0, -v[2],  v[1]],
+                        [ v[2],     0, -v[0]],
+                        [-v[1],  v[0],     0]])
+
+    R = I + v_cross + ((v_cross @ v_cross) * (1/(1+c)))
+
+    return R
+
 WriteInfo = namedtuple('WriteInfo', ['pdb', 'top'])
 
 GMXJobLog = namedtuple('GMXJob', ['files', 'stdin', 'stdout', 'stderr'])
 BoxLog = namedtuple('BoxLog', ['boxtype', 'd', 'vectors'])
-
 
 class GMXLinkerSystem():
     def __init__(self, sequence, name=None, wd=None):
@@ -321,8 +360,18 @@ class GMXLinkerSystem():
             self.topol = TopolWithItps(f'{td}/{topout}')
             self.traj = md.load_pdb(f'{td}/{pdbout}', no_boxchk=True, standard_names=False)
 
-    def optimise_rdsq_box(self, target_mindist, tolerance=0.01, init_guess=None):
-        init_guess = target_mindist/2 if init_guess is None else init_guess
+    def optimise_rdsq_box(self, target_mindist, tolerance=0.01):
+        # Orient the protein's long axis with the x-axis - this is the worst-case orientation
+        pdists = scipy.spatial.distance.squareform(pdist(self.coords))
+        idx_a, idx_b = np.unravel_index(np.argmax(pdists), pdists.shape)
+        vec_a, vec_b = self.coords[idx_a], self.coords[idx_b]
+        long_axis = vec_a - vec_b
+        long_axis = long_axis / np.linalg.norm(long_axis)
+        rot_mat = align_to(long_axis, [1, 0, 0])
+        new_coords = [rot_mat @ c for c in self.coords]
+        self.traj.xyz = np.array([new_coords])
+
+        # Optimise the box
         ubound = target_mindist
         lbound = 0.0
 
@@ -349,7 +398,7 @@ class GMXLinkerSystem():
         a = (d, 0.0, 0.0)
         b = (0.0, d, 0.0)
         c = (d/2.0, d/2.0, sqrt(2.0)*d/2.0)
-        vecs = np.array(len(traj) * [[a, b, c]])
+        vecs = np.array(len(self.traj) * [[a, b, c]])
         if self.traj.unitcell_vectors is not None:
             raise ValueError(f'self.traj already has a unit cell: {traj.unitcell_vectors}')
         self.traj.unitcell_vectors = vecs
@@ -366,7 +415,7 @@ class GMXLinkerSystem():
         a = (d, 0.0, 0.0)
         b = (d/2.0, sqrt(3.0)*d/2.0, 0.0)
         c = (d/2.0, sqrt(3.0)*d/6.0, sqrt(6.0)*d/3.0)
-        vecs = np.array(len(traj) * [[a, b, c]])
+        vecs = np.array(len(self.traj) * [[a, b, c]])
         if self.traj.unitcell_vectors:
             raise ValueError(f'self.traj already has a unit cell')
         self.traj.unitcell_vectors = vecs
@@ -432,15 +481,45 @@ class GMXLinkerSystem():
             args = [('gmx', cmd)] + [self.kwarg_to_arg(k,v) for k,v in kwargs.items()]
             args = [item for sublist in args for item in sublist]
 
-        p = sp.Popen(args, stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE, cwd=cwd)
-        stdout_data, stderr_data = p.communicate(bytes(stdin, 'utf-8'), timeout=timeout)
-        stdout_data = str(stdout_data, encoding='utf-8')
-        stderr_data = str(stderr_data, encoding='utf-8')
+        path = cwd if cwd is not None else '.'
+        if 'deffnm' in kwargs:
+            outname = f'{kwargs["deffnm"]}'
+        else:
+            outname = f'gmx_{args[1]}'
+        outname = f'{path}/{outname}'
+        i=0
+        while True:
+            eout = f'{outname}.e.{i:02}'
+            oout = f'{outname}.o.{i:02}'
+            if (
+                os.path.exists(eout)
+                or os.path.exists(oout)
+            ):
+                i += 1
+            else:
+                break
+        with open(eout, mode='x+') as e, open(oout, mode='x+') as o:
+            p = sp.Popen(args, stdin=sp.PIPE, stdout=o, stderr=e, cwd=cwd, encoding='utf-8')
+            if stdin:
+                p.communicate(stdin, timeout=timeout)
+            elif args[1] == 'mdrun':
+                with open(eout, mode='rb') as f:
+                    while p.poll() is None:
+                        s = f.read(1000)
+                        sys.stdout.write(s)
+                        if not s:
+                            time.sleep(1)
+            else:
+                p.wait()
+            e.seek(0)
+            o.seek(0)
+            stdout_data = o.read()
+            stderr_data = e.read()
         if p.returncode:
             raise ValueError(f'GROMACS returned error code {p.returncode}; stderr was:\n {stderr_data}; contents of cwd are {os.listdir(cwd)}')
 
         self.log.append(GMXJobLog(
-            files=VirtualFiles(cwd),
+            files=VirtualFiles(path),
             stdin=stdin,
             stdout=stdout_data,
             stderr=stderr_data
@@ -464,7 +543,7 @@ class GMXLinkerSystem():
         elif value is True:
             return (f"-{key}", )
         else:
-            return (f"-{key}", value)
+            return (f"-{key}", str(value))
 
     def solvate(self):
         with TemporaryDirectory() as path:
@@ -476,7 +555,8 @@ class GMXLinkerSystem():
                 cwd=path,
                 cp=pdbin,
                 o=pdbout,
-                p=topinout
+                p=topinout,
+                cs=f'{self.ff.name}.ff/tips3p884.gro'
             )
             print(stderr_data)
             print(stdout_data)
@@ -520,6 +600,95 @@ class GMXLinkerSystem():
             self.topol = TopolWithItps(topinout)
             self.load_pdb(f'{path}/{pdbout}')
 
+
+
+    def em(self):
+        with TemporaryDirectory() as path:
+            pdbin, topinout = self.write(path)
+            pdbout = 'em.pdb'
+            tpr_tmp = 'em.tpr'
+
+            mdp = MDP20181(f'{path}/{self.ff.name}.ff/em.mdp')
+            mdp.write(f'{path}/em.mdp')
+
+            _, stdout_data, stderr_data = self.call_gmx(
+                cmd='grompp',
+                stdin='',
+                cwd=path,
+                f='em.mdp',
+                c=pdbin,
+                p=topinout,
+                o=tpr_tmp
+            )
+            _, stdout_data, stderr_data = self.call_gmx(
+                cmd='mdrun',
+                stdin='',
+                cwd=path,
+                deffnm='em',
+                c=pdbout,
+                v=True
+            )
+            self.topol = TopolWithItps(topinout)
+            self.load_pdb(f'{path}/{pdbout}')
+
+    def trajvis(self, filename, cwd=None):
+        pathname, _, extension = filename.rpartition('.')
+        trajout_tmp = f'{pathname}.tmp.{extension}'
+        trajout = f'{pathname}.vis.{extension}'
+        pdbout = f'{pathname}.vis.first.pdb'
+
+        with TemporaryDirectory() as path:
+            pdbin, topin = self.write(path)
+            mdp_tmp=f'{path}/trjconv.mdp'
+            tpr_tmp=f'{path}/trjconv.tpr'
+            mdp = MDP20181(f'{path}/{self.ff.name}.ff/em.mdp')
+            mdp.write(mdp_tmp)
+            self.call_gmx(
+                cmd='grompp',
+                stdin='',
+                cwd=cwd,
+                f=mdp_tmp,
+                c=pdbin,
+                p=topin,
+                o=tpr_tmp
+            )
+            self.call_gmx(
+                cmd='trjconv',
+                stdin='Protein\nSystem\n',
+                cwd=cwd,
+                f=filename,
+                s=tpr_tmp,
+                o=trajout_tmp,
+                pbc='mol',
+                ur='compact',
+                center=True
+            )
+            if extension == 'xtc':
+                self.call_gmx(
+                    cmd='trjconv',
+                    stdin='System\n',
+                    cwd=cwd,
+                    f=trajout_tmp,
+                    s=tpr_tmp,
+                    o=pdbout,
+                    dump=0
+                )
+                self.call_gmx(
+                    cmd='trjconv',
+                    stdin='C-alpha\nsystem\n',
+                    cwd=cwd,
+                    f=trajout_tmp,
+                    s=tpr_tmp,
+                    o=trajout,
+                    fit='trans'
+                )
+                os.remove(trajout_tmp)
+            else:
+                os.rename(trajout_tmp, trajout)
+
+
+
+
     def load_pdb(self, filename):
         self.traj = md.load_pdb(filename, no_boxchk=True, standard_names=False)
         with TemporaryDirectory() as path:
@@ -549,3 +718,39 @@ class GMXLinkerSystem():
                 center=True
             )
             self.traj = md.load_pdb(f'{path}/{pdbout}', no_boxchk=True, standard_names=False)
+
+    def run_sim(self, mdp, deffnm, cwd='.'):
+        pdbin, topinout = self.write(f'{cwd}')
+        tprinout = f'{cwd}/{deffnm}.tpr'
+        mdpinout = f'{cwd}/{deffnm}.mdp'
+
+        mdp.write(mdpinout)
+
+        _, stdout_data, stderr_data = self.call_gmx(
+            cmd='grompp',
+            stdin='',
+            cwd=cwd,
+            f=mdpinout,
+            c=pdbin,
+            p=topinout,
+            o=tprinout
+        )
+        print(stderr_data)
+        print(stdout_data)
+        _, stdout_data, stderr_data = self.call_gmx(
+            cmd='mdrun',
+            stdin='',
+            cwd=cwd,
+            deffnm=deffnm,
+            v=True
+        )
+        self.trajvis(f'{cwd}/{deffnm}.xtc')
+
+
+
+
+def save_extended_linker(seq, filename="out.pdb", boxbuffer=1.2):
+    structure = make_extended_capped_peptide(seq)
+    traj = bio_struct_to_mdtraj(structure)
+    add_rdsq_box(traj, maxdist(traj) + 2 * boxbuffer)
+    traj.save(filename)
