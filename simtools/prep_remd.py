@@ -9,19 +9,24 @@ from typing import List, Optional
 def calc_temps_optimal(
     min_temp: float,
     num_reps: int,
-    const: float
+    const: float,
+    firsthalf: bool = False
 ) -> List[float]:
     """Compute a temperature ladder with num_reps rungs starting at min_temp
 
     Method from Prakash, Barducci and Parrinello, 2011, JCTC 7 (7) 2025-2027
     https://pubs.acs.org/doi/full/10.1021/ct200208h
-    Const is c/a in eq 5"""
+    Const is c/a in eq 5
+    If firsthalf is True, the first step on the ladder will be half the
+    size of the later steps."""
     temps = [min_temp]
     for i in range(1, num_reps):
         t_im1 = temps[-1]
         b_im1 = 1 / t_im1
         b_i = (b_im1 - sqrt(const * b_im1))
         t_i = 1 / b_i
+        if firsthalf and i == 1:
+            t_i = t_i / 2.0 + t_im1 / 2.0
         temps.append(t_i)
     return temps
 
@@ -32,7 +37,8 @@ def calc_optimal_const(
     num_reps: int,
     lbound: float = 0.0,
     ubound: Optional[float] = None,
-    tolerance: Optional[float] = None
+    tolerance: Optional[float] = None,
+    firsthalf: bool = False
 ) -> float:
     """Find an appropriate constant for calc_temps_optimal()
 
@@ -40,7 +46,9 @@ def calc_optimal_const(
     the desired min/max/num within tolerance. Overkill but easy search
     problem so who cares. Defaults for lbound, ubound and tolerance
     should return a constant that gives min/max/num to within machine
-    precision for almost any combination of min/max/num."""
+    precision for almost any combination of min/max/num. If firsthalf
+    is True, the first step on the ladder will be half the size of the
+    later steps."""
     if tolerance is None:
         tolerance = sys.float_info.epsilon * max_temp
 
@@ -72,7 +80,12 @@ def calc_optimal_const(
     while True:
         # Try a const midway between the bounds
         const = (ubound + lbound) / 2.0
-        max_temp_const = calc_temps_optimal(min_temp, num_reps, const)[-1]
+        max_temp_const = calc_temps_optimal(
+            min_temp,
+            num_reps,
+            const,
+            firsthalf=firsthalf
+        )[-1]
 
         # If it's within tolerance, return const
         if abs(max_temp_const - max_temp) < tolerance:
@@ -96,12 +109,15 @@ def calc_temps(
     min_temp: float,
     max_temp: float,
     num_reps: int,
-    method: TempLadderMethod = OPTIMAL
+    method: TempLadderMethod = OPTIMAL,
+    **kwargs
 ) -> List[float]:
     """Calculate a temperature ladder"""
     if method is OPTIMAL:
-        const = calc_optimal_const(min_temp, max_temp, num_reps)
-        return calc_temps_optimal(min_temp, num_reps, const)
+        const = calc_optimal_const(min_temp, max_temp, num_reps, **kwargs)
+        return calc_temps_optimal(min_temp, num_reps, const, **kwargs)
+    elif kwargs:
+        raise ValueError('Extra keyword arguments are only for method OPTIMAL')
     elif method is GEOMETRIC:
         ratio = (max_temp / min_temp) ** (1 / (num_reps - 1))
         return [min_temp * ratio ** i for i in range(num_reps)]
