@@ -1,4 +1,6 @@
 from copy import copy
+import mdtraj as md
+
 
 def make_martini_ndx(top, f=None):
     """Construct a gromacs ndx file from a martini MDTraj topology"""
@@ -20,7 +22,9 @@ def make_martini_ndx(top, f=None):
         + ndx.get('NC3+', [])
         + ndx.get('CA+', [])
     )
-    ndx['non-solvent'] = [a.index+1 for a in top.atoms if a.index+1 not in ndx['solvent']]
+    ndx['non-solvent'] = [
+        a.index+1 for a in top.atoms if a.index+1 not in ndx['solvent']
+    ]
     if f:
         for k, v in ndx.items():
             f.write("[ {} ]\n".format(k))
@@ -88,19 +92,24 @@ class BatchNGLViewRenderer(Generator):
         batch = self.batch
         out = self.out
 
-        for name,kwargs in batch.items():
+        for name, kwargs in batch.items():
             prev_image_data = copy(view._image_data)
 
             view.frame = kwargs.get("frame", view.frame)
-            yield "Check that the view looks OK for {}, then execute this cell again.".format(name)
+            yield (
+                f'Check that the view looks OK for {name}, then execute '
+                f'this cell again.'
+            )
 
             while view._image_data == prev_image_data:
                 view.render_image(**kwargs)
-                yield "Image (re-)rendered. Execute this cell again in a sec. If you see this a lot, try a longer sec!"
+                yield (
+                    'Image (re-)rendered. Execute this cell again in a '
+                    'sec. If you see this a lot, try a longer sec!'
+                )
 
             image = view._display_image()
             out[name] = image
-
 
     def __call__(self):
         try:
@@ -109,3 +118,15 @@ class BatchNGLViewRenderer(Generator):
             msg = "All done! You can stop executing now."
         print(msg)
         return self.out
+
+
+def md_load(*args, **kwargs):
+    '''Call mdtraj.load with sane defaults'''
+    pdbkwargs = dict(standard_names=False, no_boxchk=True)
+    pdbkwargs.update(kwargs)
+    try:
+        # If it's a pdb, just load it without trying to be clever
+        return md.load(*args, **pdbkwargs)
+    except TypeError:
+        # Not a pdb, so use the defaults
+        return md.load(*args, **kwargs)
