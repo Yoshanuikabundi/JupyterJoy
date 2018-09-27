@@ -8,7 +8,7 @@ import re
 class ReadOnlyDict(Mapping):
     def __init__(self, data):
         self.__data__ = data
-    def __getitem__(self, key): 
+    def __getitem__(self, key):
         return self.__data__[key]
     def __len__(self):
         return len(self.__data__)
@@ -59,24 +59,57 @@ class MDPDirective(MDPDirectiveBase):
         name = process_name(self.arguments[0])
         self.mdp_entries[name] = ReadOnlyDict({
             "docname": self.arguments[0],
-            "docstring": docstring, 
+            "docstring": docstring,
             "options": options_dict,
             "default": default,
             "units": units
         })
         return []
 
+    @staticmethod
+    def get_default_and_units(content):
+        if not content:
+            return None, None
+        firstline = content.splitlines()[0]
+        words = firstline.split()
+        defaults, units = [], []
+        for s in words:
+            s = s.strip()
+            if s[0] in '(' and s[-1]==')' and not units:
+                defaults.append(s[1:-1])
+            elif s[0]=='[' and s[-1]==']':
+                units.append(s[1:-1])
+            elif s in ['/', '*', 'or']:
+                units.append(s)
+            else:
+                break
+
+        if len(defaults) == 0:
+            try:
+                float(units[0])
+            except ValueError:
+                default = None
+            except IndexError:
+                default = None
+            else:
+                default = units.pop(0)
+        elif len(defaults) == 1:
+            default = defaults[0]
+        else:
+            raise ValueError(f'Multiple candidate defaults in {content}')
+
+        units = ''.join(units).replace('[', '').replace(']', '').replace('or', ' or ').strip()
+        units = units if units else None
+
+        return default, units
+
     def process_content_doc(self, content_doc):
         """Split a content doc tree into the docstring, default and units"""
         content = content_doc.astext()
-        match = self._re_def_and_units_line.match(content)
-        if match:
-            default, units = match.group("default"), match.group("units")
-        else:
-            default, units = None, None
+        default, units = self.get_default_and_units(content)
         docstring = re.sub(self._re_single_newlines , ' ', content)
         return docstring, default, units
-    
+
 class MDPValueDirective(MDPDirectiveBase):
     def run(self):
         """Read and process mdp-values into dicts with docstrings"""
@@ -89,7 +122,7 @@ class MDPValueDirective(MDPDirectiveBase):
             options_dict = list(self.mdp_entries.values())[-1]["options"]
         options_dict[self.arguments[0]] = docstring
         return []
-    
+
 def ignore_role(name, rawtext, text, lineno, inliner, options={}, content=[]):
     node = docutils.nodes.Text(text)
     return ([node],[])
@@ -123,19 +156,16 @@ def parse_rst_string(string):
     components = (docutils.parsers.rst.Parser,)
     settings = docutils.frontend.OptionParser(components=components).get_default_values()
     document = docutils.utils.new_document('<rst-doc>', settings=settings)
-    parser.parse(string, document) 
+    parser.parse(string, document)
     return document
 
 def parse_rst_file(path):
     mdp_entries = OrderedDict()
     ThisMDPDirective = type('ThisMDPDirective', (MDPDirective,), {'odict': mdp_entries})
     new_directives = (
-        ('mdp', ThisMDPDirective), 
-        ('MDP', ThisMDPDirective)            
+        ('mdp', ThisMDPDirective),
+        ('MDP', ThisMDPDirective)
     )
     with DirectivesRegistered(*new_directives), open(path, 'r') as file:
         doc = parse_rst_string(file.read())
     return mdp_entries, doc
-
-
-

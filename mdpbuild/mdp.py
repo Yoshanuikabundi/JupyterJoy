@@ -4,7 +4,7 @@ import os
 import re
 from numbers import Number
 from copy import copy, deepcopy
-from JupyterJoy.pbash import *
+# from JupyterJoy.pbash import *
 import mdtraj as md
 import shlex
 
@@ -17,6 +17,16 @@ class Default():
 
     def __repr__(self):
         return "Default({})".format(repr(self.obj))
+
+    def __bool__(self):
+        return False
+
+    @classmethod
+    def unwrap(cls, obj):
+        if isinstance(obj, cls):
+            return obj.obj
+        else:
+            return obj
 
 class MDPBase():
     """Base class for creating MDP files"""
@@ -38,13 +48,16 @@ class MDPBase():
         super().__init__(*args, **kwargs)
         self.__dict__['values'] = {}
         self.__dict__['comments'] = {}
+        self.__dict__['meta'] = {}
         if data is None: return
 
         try:
             with open(data) as f:
                 data = f.read()
+                self.meta['filename'] = f.name
         except (FileNotFoundError, TypeError, OSError):
             pass
+
         self.read_mdp(data)
 
 
@@ -117,7 +130,7 @@ class MDPBase():
     def __dir__(self):
         out = super().__dir__()
         opts = self.options.items()
-        out += [v['docname'] for k,v in opts if k not in self.obsoletes]
+        out += [process_name(v['docname']) for k,v in opts if k not in self.obsoletes]
         return out
 
     @classmethod
@@ -177,7 +190,7 @@ class MDPBase():
         if comments:
             outstr += '; ' + str(comments['after']).replace('\n', '\n; ')
 
-        outstr = outstr.replace('; \n', '\n').strip()
+        outstr = outstr.replace('; \n', '\n').strip() + '\n'
         if tofile:
             with open(tofile, 'w') as f:
                 print(outstr, file=f, flush=True)
@@ -210,15 +223,6 @@ class MDPBase():
             return self.comments[option]
         except KeyError:
             return {}
-
-    def comment_total_time(self):
-        total_ns = self.nsteps * self.dt / 1000
-        self.comment('nsteps', "{} ns".format(total_ns), 'on')
-
-    def set_time(self, dt_fs, time_ns):
-        self.dt = dt_fs / 1000
-        self.nsteps = int(time_ns / self.dt * 1000)
-        self.comment_total_time()
 
     _re_mdp_line_match = re.compile(r'^\s*(?P<key>\S*?)\s*=\s*(?P<value>.*?)\s*$')
 
@@ -292,48 +296,53 @@ class MDPBase():
         else:
             raise ValueError('MDP option {} already exists.'.format(name))
 
-    def setup_sim(self, name, structure, topology, **kwargs):
-        try:
-            strucname = f"{name}_start.pdb"
-            structure.save(strucname)
-        except AttributeError:
-            strucname = str(structure)
+    @classmethod
+    def add_method(cls, func):
+        setattr(cls, func.__name__, func)
+        return func
 
-        self.write(tofile=f'{name}.mdp')
+    # def setup_sim(self, name, structure, topology, **kwargs):
+    #     try:
+    #         strucname = f"{name}_start.pdb"
+    #         structure.save(strucname)
+    #     except AttributeError:
+    #         strucname = str(structure)
+
+    #     self.write(tofile=f'{name}.mdp')
 
 
-        kwargs.setdefault('c', strucname)
-        kwargs.setdefault('p', topology)
-        kwargs.setdefault('o', name)
-        kwargs.setdefault('f', name)
+    #     kwargs.setdefault('c', strucname)
+    #     kwargs.setdefault('p', topology)
+    #     kwargs.setdefault('o', name)
+    #     kwargs.setdefault('f', name)
 
-        gromppline = self.gromppcmd + " "
-        gromppline += " ".join([f"-{k} {v}" for k,v in kwargs.items()])
+    #     gromppline = self.gromppcmd + " "
+    #     gromppline += " ".join([f"-{k} {v}" for k,v in kwargs.items()])
 
-        ip = get_ipython()
-        pb = ip.find_magic('pb')
-        pb(gromppline)
-        return f"{self.mdruncmd} -v -deffnm {name}"
+    #     ip = get_ipython()
+    #     pb = ip.find_magic('pb')
+    #     pb(gromppline)
+    #     return f"{self.mdruncmd} -v -deffnm {name}"
 
-    def run_sim(self, name, *args, **kwargs):
-        mdrunline = self.setup_sim(name, *args, **kwargs)
+    # def run_sim(self, name, *args, **kwargs):
+    #     mdrunline = self.setup_sim(name, *args, **kwargs)
 
-        ip = get_ipython()
-        pb = ip.find_magic('pb')
-        pb(mdrunline)
+    #     ip = get_ipython()
+    #     pb = ip.find_magic('pb')
+    #     pb(mdrunline)
 
-        try:
-            traj = md.load("{}.xtc".format(name), top="{}.gro".format(name))
-            return traj
-        except OSError:
-            return None
+    #     try:
+    #         traj = md.load("{}.xtc".format(name), top="{}.gro".format(name))
+    #         return traj
+    #     except OSError:
+    #         return None
 
-    def extend_sim(self, name, time_ns, *args, **kwargs):
-        old_time_ns = self.nsteps * self.dt / 1000
-        self.set_time(self.dt*1000, time_ns)
-        mdrunline = self.setup_sim(self, name, *args, **kwargs)
-        self.set_time(self.dt*1000, old_time_ns)
-        return mdrunline + " -cpi"
+    # def extend_sim(self, name, time_ns, *args, **kwargs):
+    #     old_time_ns = self.nsteps * self.dt / 1000
+    #     self.set_time(self.dt*1000, time_ns)
+    #     mdrunline = self.setup_sim(self, name, *args, **kwargs)
+    #     self.set_time(self.dt*1000, old_time_ns)
+    #     return mdrunline + " -cpi"
 
 
 gmxdocs_path = os.path.dirname(__file__) + "/gmxdocs"
@@ -342,7 +351,103 @@ MDP20181 = MDPBase.create_subclass_from_doc(
     'MDP20181',
     f'{gmxdocs_path}/2018.1/mdp-options.rst'
 )
-MDP20181.add_obsolete('title')
-MDP20181.add_obsolete('nstxtcout', 'nstxout-compressed')
-MDP20181.add_obsolete('xtc-precision', 'compressed-x-precision')
-MDP20181.add_obsolete('xtc-grps', 'compressed-x-grps')
+
+MDP20183 = MDPBase.create_subclass_from_doc(
+    'MDP20183',
+    f'{gmxdocs_path}/2018.3/mdp-options.rst'
+)
+
+gmx_2018_series = [
+    MDP20181,
+    MDP20183
+]
+
+for cls in gmx_2018_series:
+    cls.add_obsolete('title')
+    cls.add_obsolete('nstxtcout', 'nstxout-compressed')
+    cls.add_obsolete('xtc-precision', 'compressed-x-precision')
+    cls.add_obsolete('xtc-grps', 'compressed-x-grps')
+
+    @cls.add_method
+    def remove_pcouple(self):
+        self.pcoupl = 'no'
+        del self.pcoupltype
+        del self.nstpcouple
+        del self.tau_p
+        del self.compressibility
+        del self.ref_p
+        self.refcoord_scaling = 'no'
+        return self
+
+    @cls.add_method
+    def align_temps(self):
+        splits = zip(
+            self.tc_grps.split(),
+            self.ref_t.split(),
+            self.tau_t.split()
+        )
+
+        maxlens = ((max(len(s) for s in tup), tup) for tup in splits)
+
+        paddeds = ([s.ljust(l) for s in tup] for l, tup in maxlens)
+
+        (
+            self.tc_grps,
+            self.ref_t,
+            self.tau_t
+        ) = ('  '.join(t).strip() for t in zip(*paddeds))
+
+        return self
+
+
+    @cls.add_method
+    def set_temperature(self, temp):
+        if self.annealing and self.annealing.lower() != 'no':
+            raise ValueError("This is an annealing simulation, set temps by hand")
+        if self.temperature_lambdas:
+            raise ValueError("Option 'temperature-lambdas' is set, set temps by hand")
+        if self.mc_temperature:
+            raise ValueError("Option 'mc-temperature' is set, set temps by hand")
+        if self.simulated_tempering and self.simulated_tempering.lower() != 'no':
+            raise ValueError("This is an simulated tempering simulation, set temps by hand")
+
+        temp_str = f'{temp:.2f}'
+
+        num_groups = len(self.tc_grps.split())
+        self.ref_t = ' '.join([temp_str] * num_groups)
+        self.align_temps()
+
+        if self.gen_vel == 'yes' or self.gen_temp:
+            self.gen_temp = temp_str
+
+        return self
+
+
+    @cls.add_method
+    def comment_total_time(self):
+        total_ns = self.nsteps * self.dt / 1000
+        self.comment('nsteps', "{} ns".format(total_ns), 'on')
+
+
+    @cls.add_method
+    def set_time(self, dt_fs, time_ns):
+        dt_ps = dt_fs / 1000
+        nsteps = int(time_ns / dt_ps * 1000)
+
+        output_freqs = [
+            ('nstxout', self.nstxout),
+            ('nstvout', self.nstvout),
+            ('nstfout', self.nstfout),
+            ('nstlog', self.nstlog),
+            ('nstcalcenergy', self.nstcalcenergy),
+            ('nstenergy', self.nstenergy),
+            ('nstxout_compressed', self.nstxout_compressed)
+        ]
+        for s, o in output_freqs:
+            o = int(Default.unwrap(o))
+            if o and nsteps % o:
+                raise ValueError(f'dt={nsteps} is not divisible by {s}={o}')
+
+        self.dt = dt_ps
+        self.nsteps = nsteps
+        self.comment_total_time()

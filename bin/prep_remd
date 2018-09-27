@@ -1,0 +1,254 @@
+#! /usr/bin/env python3
+
+import argparse
+from JupyterJoy.mdpbuild.mdp import MDP20181
+from JupyterJoy.simtools.prep_remd import *
+import os
+import mdtraj as md
+import subprocess
+from collections import namedtuple
+
+def md_load(*args, **kwargs):
+    try:
+        # If it's a pdb, just load it without trying to be fancy
+        return md.load(*args, **kwargs, standard_names=False, no_boxchk=True)
+    except TypeError:
+        # Not a pdb, so use the defaults
+        return md.load(*args, **kwargs)
+
+parser = argparse.ArgumentParser(
+    description=(
+        'Prepare files for parallel tempering/temperature replica exchange '
+        '(T-REMD) for GROMACS.'
+    ),
+    add_help=False
+)
+
+parser.add_argument(
+    '-h',
+    '--help',
+    action='help',
+    help='Show this help message and exit.'
+)
+
+parser.add_argument(
+    'temperatures',
+    nargs='+',
+    type=lambda s: float(s.strip().rstrip(',')),
+    help=(
+        'Temperatures to construct files for. Note that these temperatures '
+        'will be rounded to 2 decimal places for clarity.'
+    ),
+    metavar=('T')
+)
+
+parser.add_argument(
+    '-n',
+    '--n_repls',
+    type=int,
+    help=(
+        'Number of replicas to interpolate between the two given '
+        'temperatures. Optimal interpolation '
+        '(see https://pubs.acs.org/doi/full/10.1021/ct200208h) is used '
+        'by default, but this can be configured with the -T/--temp-method '
+        'flags. Fails if more or less than two temperatures are given as '
+        'positional arguments.'
+    )
+)
+
+
+parser.add_argument(
+    '-m',
+    '--mdps',
+    nargs='+',
+    default=[],
+    type=MDP20181,
+    help='Template MDP file(s).',
+    metavar='*.mdp'
+)
+
+parser.add_argument(
+    '-p',
+    '--plumed',
+    help=(
+        'Template PLUMED.dat file. Will replace each instance of $TEMP '
+        'with the temperature of the current replica.'
+    ),
+    metavar='PLUMED.dat'
+)
+
+parser.add_argument(
+    '--plumed_first',
+    help=(
+        'Special template PLUMED.dat file for the first replica. Will '
+        'replace each instance of $TEMP with the temperature of the '
+        'current replica. If not present, will just use the same file '
+        'as every other replica.'
+    ),
+    metavar='PLUMED1.dat'
+)
+
+parser.add_argument(
+    '-c',
+    '--coordinates',
+    nargs='+',
+    type=md_load,
+    help=(
+        'Coordinate files to use as replica starting structures. If too '
+        'few are provided, they will be repeated in sequence until every '
+        'replica has a structure. If -t/--traj is given, this will be used '
+        'as the topology.'
+    ),
+    metavar='*.pdb'
+)
+
+parser.add_argument(
+    '-t',
+    '--traj',
+    help=(
+        'Trajectory file from which to take starting structures. '
+        'Evenly spaced frames are taken from the trajectory to satisfy '
+        'the number of replicas. If too few are provided, they will be '
+        'repeated in sequence until every replica has a structure. The '
+        'topology will be taken from the -c/--coordinates argument.'
+    ),
+    metavar='*.xtc'
+)
+
+parser.add_argument(
+    '-s',
+    '--starting-structure',
+    default='start.pdb',
+    help='The name of the output starting structures.',
+    metavar='start.pdb'
+)
+
+parser.add_argument(
+    '-e',
+    '--execute',
+    help='Command to execute in each folder after files are copied or generated',
+    nargs=argparse.REMAINDER
+)
+
+parser.add_argument(
+    '-f',
+    '--force',
+    action='store_true',
+    help='Skip checks for existing files and folders and overwrite any existing files.'
+)
+
+parser.add_argument(
+    '-T',
+    '--temp-method',
+    choices=['optimal', 'geometric', 'linear'],
+    help='Method to use to interpolate temperatures',
+    default='optimal'
+)
+
+def process_args(parser):
+    ParsedArgs = namedtuple('ParsedArgs', [
+        'temps',
+        'num_reps',
+        'mdps',
+        'strucs',
+        'struc_fname',
+        'plumed_fn',
+        'plumed_conf',
+        'cmd'
+    ])
+
+    args = parser.parse_args()
+
+    if args.n_repls:
+        if len(args.temperatures) != 2:
+            raise ValueError(
+                'Cannot interpolate temperatures. Either specify '
+                'two temperatures and the -n/--n_repls flag, or just '
+                'specify the temperatures you want'
+            )
+        num_reps = args.n_repls
+        min_t, max_t = args.temperatures
+        float_temps = calc_temps(min_t, max_t, num_reps, args.temp_method)
+    else:
+        num_reps = len(args.temperatures)
+        float_temps = args.temperatures
+
+    temps = [f'{t:.2f}' for t in float_temps]
+
+    if args.plumed:
+        plumed_fn = os.path.basename(args.plumed)
+        with open(args.plumed) as f:
+            plumed_conf = f.read()
+        if args.plumed_first:
+            with open(args.plumed_first) as f:
+                plumed_conf = (f.read(), plumed_conf)
+        else:
+            plumed_conf = (plumed_conf, plumed_conf)
+    else:
+        plumed_fn = None
+        plumed_conf = None
+
+
+    mdps = args.mdps
+
+    if not args.force:
+        for t in temps:
+            if os.path.exists(str(t)):
+                raise ValueError(f"Temperature {t} already has a folder")
+
+    strucs = get_starting_strucs(args.traj, args.coordinates, num_reps)
+
+    struc_fname = args.starting_structure
+
+    cmd = args.execute
+
+    return ParsedArgs(
+        temps,
+        num_reps,
+        mdps,
+        strucs,
+        struc_fname,
+        plumed_fn,
+        plumed_conf,
+        cmd)
+
+if __name__ == '__main__':
+    (
+        temps,
+        num_reps,
+        mdps,
+        strucs,
+        struc_fname,
+        plumed_fn,
+        plumed_conf,
+        cmd
+    ) = process_args(parser)
+
+    assert num_reps == len(temps)
+    assert len(strucs) == 0 or len(strucs) == num_reps
+
+    for i,t in enumerate(temps):
+        try:
+            os.mkdir(t)
+        except FileExistsError:
+            pass
+
+        if strucs:
+            strucs[i].save(f'{t}/{struc_fname}')
+
+        if plumed_fn:
+            if i:
+                this_plumed_conf = plumed_conf[1]
+            else:
+                this_plumed_conf = plumed_conf[0]
+
+            this_plumed_conf = this_plumed_conf.replace('$TEMP', t)
+            with open(f'{t}/{plumed_fn}', 'w') as f:
+                f.write(this_plumed_conf)
+
+        create_mdps(t, mdps)
+
+        if cmd:
+            subprocess.run(cmd, cwd=t, check=True)
+        else:
+            print('.', end='', flush=True)

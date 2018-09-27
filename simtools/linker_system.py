@@ -13,7 +13,7 @@ import time
 
 import sys
 
-from JupyterJoy.mdpbuild.mdp import MDP20181
+from JupyterJoy.mdpbuild.mdp import MDP20183
 from JupyterJoy.tophat import Topology
 from JupyterJoy.simtools.prep_remd import calc_temps
 from JupyterJoy.bqploteins import TrajPlotTime
@@ -360,16 +360,21 @@ class GMXLinkerSystem():
             self.topol = TopolWithItps(f'{td}/{topout}')
             self.traj = md.load_pdb(f'{td}/{pdbout}', no_boxchk=True, standard_names=False)
 
-    def optimise_rdsq_box(self, target_mindist, tolerance=0.01):
-        # Orient the protein's long axis with the x-axis - this is the worst-case orientation
+    def orient_protein(self, target_vec):
+        if 'SOL' in self.topol.molecules:
+            raise ValueError("Can't orient solvated system")
         pdists = scipy.spatial.distance.squareform(pdist(self.coords))
         idx_a, idx_b = np.unravel_index(np.argmax(pdists), pdists.shape)
         vec_a, vec_b = self.coords[idx_a], self.coords[idx_b]
         long_axis = vec_a - vec_b
         long_axis = long_axis / np.linalg.norm(long_axis)
-        rot_mat = align_to(long_axis, [1, 0, 0])
+        rot_mat = align_to(long_axis, target_vec)
         new_coords = [rot_mat @ c for c in self.coords]
         self.traj.xyz = np.array([new_coords])
+
+    def optimise_rdsq_box(self, target_mindist, tolerance=0.01):
+        # Orient the protein's long axis with the x-axis - this is the worst-case orientation
+        self.orient_protein([1, 0, 0])
 
         # Optimise the box
         ubound = target_mindist
@@ -378,7 +383,8 @@ class GMXLinkerSystem():
         while True:
             self.traj.unitcell_vectors = None
             guess = (ubound + lbound) / 2.0
-            self.add_rdsq_box(2 * guess + self.calc_maxdist())
+            d = 2 * guess + self.calc_maxdist()
+            self.add_rdsq_box(d)
             this_mindist = self.calc_mindist()
             print(ubound, guess, lbound, this_mindist)
             if abs(this_mindist - target_mindist) <= tolerance:
@@ -390,6 +396,13 @@ class GMXLinkerSystem():
             else:
                 raise ValueError('stuck')
             del self.log[-1]
+
+        print(f'A buffer of {guess} nm gives a box with d={d}. The minimum PI distance is {this_mindist}.')
+
+        # And reorient to the z-axis - best-case orientation
+        self.orient_protein([0, 0, 1])
+
+        print(f'After reorientation, the PI distance is {self.calc_mindist()}.')
 
 
     def add_rdsq_box(self, d, log=True):
@@ -467,19 +480,30 @@ class GMXLinkerSystem():
             raise ValueError('traj should have only one frame')
         self._traj = traj
 
-    def call_gmx(self, cmdline=None, cmd=None, stdin='', timeout=None, cwd=None, **kwargs):
+    def call_gmx(self, cmdline=None, cmd=None, stdin='', timeout=None, cwd=None, mpiranks=None, **kwargs):
+        cmd = cmd.strip()
+        mdrun_synonyms = ['mdrun', 'mdrun_mpi']
         if cmdline and cmd:
             raise ValueError('Specify only one of cmd and cmdline')
         if not (cmdline or cmd):
             raise ValueError('Specify either cmdline or cmd')
         if cmdline and kwargs:
             raise ValueError('Specify arguments in cmdline or as kwargs, not both')
+        if cmdline and mpiranks:
+            raise ValueError('Specify mpi in cmdline or as mpiranks, not both')
+        if mpiranks and cmd not in mdrun_synonyms:
+            raise ValueError('mpi is only compatible with cmd=mdrun_mpi')
 
         if cmdline:
             args = ['gmx'] + list(shlex.split(cmdline))
         else:
             args = [('gmx', cmd)] + [self.kwarg_to_arg(k,v) for k,v in kwargs.items()]
             args = [item for sublist in args for item in sublist]
+
+        cmd_is_mdrun = args[1] in mdrun_synonyms
+
+        if mpiranks:
+            args = ['mpirun', '-np', str(mpiranks), 'mdrun_mpi'] + args[2:]
 
         path = cwd if cwd is not None else '.'
         if 'deffnm' in kwargs:
@@ -502,13 +526,16 @@ class GMXLinkerSystem():
             p = sp.Popen(args, stdin=sp.PIPE, stdout=o, stderr=e, cwd=cwd, encoding='utf-8')
             if stdin:
                 p.communicate(stdin, timeout=timeout)
-            elif args[1] == 'mdrun':
+            elif cmd_is_mdrun:
                 with open(eout, mode='rb') as f:
                     while p.poll() is None:
                         s = f.read(1000)
                         sys.stdout.write(s)
                         if not s:
                             time.sleep(1)
+                    s = f.read()
+                    sys.stdout.write(s)
+
             else:
                 p.wait()
             e.seek(0)
@@ -528,22 +555,36 @@ class GMXLinkerSystem():
         return (p, stdout_data, stderr_data)
 
     def write(self, path):
+        topfn = self.write_top(path)
+        pdbfn = self.write_pdb(path)
+        return WriteInfo(pdb=pdbfn, top=topfn)
+
+    def write_top(self, path):
         self.ff.write(path=path)
         topfn = f'{path}/{self.name}.top'
         self.topol.write(topfn)
+        return topfn
+
+    def write_pdb(self, path):
         pdbfn = f'{path}/{self.name}.pdb'
         self.traj.save(pdbfn)
-        return WriteInfo(pdb=pdbfn, top=topfn)
+        return pdbfn
+
 
 
     @staticmethod
     def kwarg_to_arg(key, value):
         if value is False or value is "no":
-            return (f"-no{key}", )
+            return [f"-no{key}"]
         elif value is True:
-            return (f"-{key}", )
+            return [f"-{key}"]
+        elif isinstance(value, str):
+            return [f"-{key}", value]
         else:
-            return (f"-{key}", str(value))
+            try:
+                return [f"-{key}"] + list(value)
+            except TypeError:
+                return [f"-{key}", str(value)]
 
     def solvate(self):
         with TemporaryDirectory() as path:
@@ -573,7 +614,7 @@ class GMXLinkerSystem():
             mol_water = 55.5
             desired_salt_conc = conc
             n_salt = int(round(n_wat * desired_salt_conc / mol_water))
-            mdp = MDP20181(f'{path}/{self.ff.name}.ff/em.mdp')
+            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
             mdp.write(f'{path}/genion.mdp')
 
             _, stdout_data, stderr_data = self.call_gmx(
@@ -608,8 +649,10 @@ class GMXLinkerSystem():
             pdbout = 'em.pdb'
             tpr_tmp = 'em.tpr'
 
-            mdp = MDP20181(f'{path}/{self.ff.name}.ff/em.mdp')
+            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
             mdp.write(f'{path}/em.mdp')
+
+            print(f'Energy minimising with .MDP file:\n{mdp.write()}')
 
             _, stdout_data, stderr_data = self.call_gmx(
                 cmd='grompp',
@@ -620,6 +663,8 @@ class GMXLinkerSystem():
                 p=topinout,
                 o=tpr_tmp
             )
+            print(stderr_data)
+            print(stdout_data)
             _, stdout_data, stderr_data = self.call_gmx(
                 cmd='mdrun',
                 stdin='',
@@ -641,7 +686,7 @@ class GMXLinkerSystem():
             pdbin, topin = self.write(path)
             mdp_tmp=f'{path}/trjconv.mdp'
             tpr_tmp=f'{path}/trjconv.tpr'
-            mdp = MDP20181(f'{path}/{self.ff.name}.ff/em.mdp')
+            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
             mdp.write(mdp_tmp)
             self.call_gmx(
                 cmd='grompp',
@@ -694,7 +739,7 @@ class GMXLinkerSystem():
         with TemporaryDirectory() as path:
             pdbin, topin = self.write(path)
             pdbout = f'{self.name}.vis.pdb'
-            mdp = MDP20181(f'{path}/{self.ff.name}.ff/em.mdp')
+            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
             mdp.write(f'{path}/trjconv.mdp')
             tpr_tmp='trjconv.tpr'
             _, stdout_data, stderr_data = self.call_gmx(
@@ -725,6 +770,7 @@ class GMXLinkerSystem():
         mdpinout = f'{cwd}/{deffnm}.mdp'
 
         mdp.write(mdpinout)
+        print(f'Running simulation with .MDP file:\n{mdp.write()}')
 
         _, stdout_data, stderr_data = self.call_gmx(
             cmd='grompp',
@@ -746,11 +792,5 @@ class GMXLinkerSystem():
         )
         self.trajvis(f'{cwd}/{deffnm}.xtc')
 
-
-
-
-def save_extended_linker(seq, filename="out.pdb", boxbuffer=1.2):
-    structure = make_extended_capped_peptide(seq)
-    traj = bio_struct_to_mdtraj(structure)
-    add_rdsq_box(traj, maxdist(traj) + 2 * boxbuffer)
-    traj.save(filename)
+    def load_xtc(self, filename):
+        return md.load_xtc(filename, top=self.traj.top)
