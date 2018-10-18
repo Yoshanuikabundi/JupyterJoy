@@ -275,6 +275,9 @@ class MDPBase():
             for placement,comment in comment_dict.items():
                 self.comment(key, comment, placement)
 
+    def copy(self):
+        return self.__class__(self.write())
+
     @classmethod
     def add_obsolete(cls, name, newname=None, docstring='Obsolete'):
         if newname:
@@ -403,13 +406,21 @@ for cls in gmx_2018_series:
     @cls.add_method
     def set_temperature(self, temp):
         if self.annealing and self.annealing.lower() != 'no':
-            raise ValueError("This is an annealing simulation, set temps by hand")
+            raise ValueError(
+                "This is an annealing simulation, set temps by hand"
+            )
         if self.temperature_lambdas:
-            raise ValueError("Option 'temperature-lambdas' is set, set temps by hand")
+            raise ValueError(
+                "Option 'temperature-lambdas' is set, set temps by hand"
+            )
         if self.mc_temperature:
-            raise ValueError("Option 'mc-temperature' is set, set temps by hand")
+            raise ValueError(
+                "Option 'mc-temperature' is set, set temps by hand"
+            )
         if self.simulated_tempering and self.simulated_tempering.lower() != 'no':
-            raise ValueError("This is an simulated tempering simulation, set temps by hand")
+            raise ValueError(
+                "This is an simulated tempering simulation, set temps by hand"
+            )
 
         temp_str = f'{temp:.2f}'
 
@@ -417,7 +428,7 @@ for cls in gmx_2018_series:
         self.ref_t = ' '.join([temp_str] * num_groups)
         self.align_temps()
 
-        if self.gen_vel == 'yes' or self.gen_temp:
+        if self.gen_vel.lower() == 'yes' or self.gen_temp:
             self.gen_temp = temp_str
 
         return self
