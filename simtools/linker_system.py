@@ -1,37 +1,31 @@
-import os
 from collections import namedtuple
-import nglview as nv
-import mdtraj as md
-from copy import copy,deepcopy
-import numpy as np
-from scipy.spatial.distance import cdist, pdist
-from panedr import edr_to_df
+import subprocess as sp
+import shlex
 from tempfile import TemporaryDirectory
 import tarfile
-import scipy
-import time
-
+from time import sleep
+import pickle
+from datetime import datetime
 import sys
+import io
+import os
+
+import mdtraj as md
 
 from JupyterJoy.mdpbuild.mdp import MDP20183
 from JupyterJoy.tophat import Topology
 from JupyterJoy.simtools.prep_remd import calc_temps
-from JupyterJoy.bqploteins import TrajPlotTime
-from JupyterJoy.funfuncs import md_load
-
-import JupyterJoy.pbash
-
-import pandas as pd
+from JupyterJoy.simtools.rest2 import temper_from_file
 
 import PeptideBuilder as pb
 import Bio.PDB
 
-import subprocess as sp
-import shlex
+import numpy as np
+from numpy import sqrt
+import scipy
+from scipy.spatial.distance import cdist, pdist
 
-from math import sqrt
-
-import io
+from panedr import edr_to_df
 
 def make_extended_peptide(seq):
     geo = pb.Geometry.geometry
@@ -317,26 +311,47 @@ def align_to(a, b):
 
     return R
 
-WriteInfo = namedtuple('WriteInfo', ['pdb', 'top'])
+WriteInfo = namedtuple('WriteInfo', ['pdb', 'top', 'pickle'])
 
 GMXJobLog = namedtuple('GMXJob', ['files', 'stdin', 'stdout', 'stderr'])
 BoxLog = namedtuple('BoxLog', ['boxtype', 'd', 'vectors'])
+PickleLog = namedtuple('PickleLog', ['time'])
 
 class GMXLinkerSystem():
-    def __init__(self, sequence, name=None, wd=None):
+    def __init__(
+        self,
+        sequence,
+        ffpath,
+        name=None,
+        wd=None,
+        min_temp=300.0,
+        max_temp=300.0,
+        num_reps=1,
+        exchange_freq=10
+    ):
         self.seq = sequence
 
         self.name = sequence if name is None else name
 
-        structure = make_extended_capped_peptide(seq)
+        structure = make_extended_capped_peptide(sequence)
         self._traj = bio_struct_to_mdtraj(structure)
 
-        self.ff = GMXForceField('/store/joshmitchell/linkers/charmm22star_kcx.ff')
+        self.ff_path = os.path.abspath(ffpath)
+        self.ff = GMXForceField(self.ff_path)
         self.watermodel = 'tips3p'
         boxbuffer = 1.2
 
         self.log = []
+        self._pickle_path = None
 
+        self._ladder = []
+        self.min_temp = min_temp
+        self.max_temp = max_temp
+        self.num_reps = num_reps
+        self.ladder_method = 'GEOMETRIC'
+        self.exchange_freq = exchange_freq
+
+    def initialise(self):
         with TemporaryDirectory() as td:
             self.ff.write(td)
             pdbin = 'extended.pdb'
@@ -480,7 +495,7 @@ class GMXLinkerSystem():
             raise ValueError('traj should have only one frame')
         self._traj = traj
 
-    def call_gmx(self, cmdline=None, cmd=None, stdin='', timeout=None, cwd=None, mpiranks=None, **kwargs):
+    def call_gmx(self, cmdline=None, cmd=None, stdin='', timeout=None, cwd=None, mpiranks=None, log_files=None, **kwargs):
         cmd = cmd.strip()
         mdrun_synonyms = ['mdrun', 'mdrun_mpi']
         if cmdline and cmd:
@@ -500,7 +515,8 @@ class GMXLinkerSystem():
             args = [('gmx', cmd)] + [self.kwarg_to_arg(k,v) for k,v in kwargs.items()]
             args = [item for sublist in args for item in sublist]
 
-        cmd_is_mdrun = args[1] in mdrun_synonyms
+        cmd = args[1]
+        cmd_is_mdrun = cmd in mdrun_synonyms
 
         if mpiranks:
             args = ['mpirun', '-np', str(mpiranks), 'mdrun_mpi'] + args[2:]
@@ -532,7 +548,7 @@ class GMXLinkerSystem():
                         s = f.read(1000)
                         sys.stdout.write(s)
                         if not s:
-                            time.sleep(1)
+                            sleep(1)
                     s = f.read()
                     sys.stdout.write(s)
 
@@ -543,10 +559,14 @@ class GMXLinkerSystem():
             stdout_data = o.read()
             stderr_data = e.read()
         if p.returncode:
-            raise ValueError(f'GROMACS returned error code {p.returncode}; stderr was:\n {stderr_data}; contents of cwd are {os.listdir(cwd)}')
+            raise ValueError(f'GROMACS returned error code {p.returncode}; stderr was:\n{stderr_data}\n\nContents of cwd are:\n{os.listdir(cwd)}')
+
+        log_files = log_files if log_files is not None else path[:5] == '/tmp/'
+
+        filelog = VirtualFiles(path) if log_files else path
 
         self.log.append(GMXJobLog(
-            files=VirtualFiles(path),
+            files=filelog,
             stdin=stdin,
             stdout=stdout_data,
             stderr=stderr_data
@@ -554,10 +574,15 @@ class GMXLinkerSystem():
 
         return (p, stdout_data, stderr_data)
 
+    def write_all(self, path):
+        topfn, pdbfn, _ = self.write(path)
+        picklefn = self.pickle(path)
+        return WriteInfo(pdb=pdbfn, top=topfn, pickle=picklefn)
+
     def write(self, path):
         topfn = self.write_top(path)
         pdbfn = self.write_pdb(path)
-        return WriteInfo(pdb=pdbfn, top=topfn)
+        return WriteInfo(pdb=pdbfn, top=topfn, pickle=None)
 
     def write_top(self, path):
         self.ff.write(path=path)
@@ -569,6 +594,39 @@ class GMXLinkerSystem():
         pdbfn = f'{path}/{self.name}.pdb'
         self.traj.save(pdbfn)
         return pdbfn
+
+    def pickle(self, path):
+        picklefn = f'{path}/{self.name}.pickle'
+        self._pickle_path = picklefn
+        with open(picklefn, 'w+b') as f:
+            pickle.dump(self, f, protocol=4)
+        return picklefn
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state['log']
+        del state['ff']
+        del state['topol']
+        return state
+
+    def __setstate__(self, state):
+        state['log'] = [PickleLog(datetime.now())]
+        path, _, basename = state['_pickle_path'].rpartition('/')
+        name, _, ext = basename.rpartition('.')
+        if ext != 'pickle' or name != state['name']:
+            raise ValueError('GMXLinkerSystem object not stored via its pickle method')
+        ff_name = os.path.basename(state['ff_path'])
+        state['ff'] = GMXForceField(f'{path}/{ff_name}')
+        state['topol'] = TopolWithItps(f'{path}/{name}.top')
+        state['_pickle_path'] = None
+        self.__dict__.update(state)
+
+    @classmethod
+    def read(cls, path):
+        with open(path, 'r+b') as f:
+            self = pickle.load(f)
+        return self
+
 
 
 
@@ -588,7 +646,7 @@ class GMXLinkerSystem():
 
     def solvate(self):
         with TemporaryDirectory() as path:
-            pdbin, topinout = self.write(path)
+            pdbin, topinout, _ = self.write(path)
             pdbout = 'extended_sol.pdb'
             _, stdout_data, stderr_data = self.call_gmx(
                 cmd='solvate',
@@ -606,7 +664,7 @@ class GMXLinkerSystem():
 
     def salt(self, conc=0.15):
         with TemporaryDirectory() as path:
-            pdbin, topinout = self.write(path)
+            pdbin, topinout, _ = self.write(path)
             pdbout = 'extended_ion.pdb'
             tpr_tmp = 'genion.tpr'
 
@@ -645,7 +703,7 @@ class GMXLinkerSystem():
 
     def em(self):
         with TemporaryDirectory() as path:
-            pdbin, topinout = self.write(path)
+            pdbin, topinout, _ = self.write(path)
             pdbout = 'em.pdb'
             tpr_tmp = 'em.tpr'
 
@@ -683,7 +741,7 @@ class GMXLinkerSystem():
         pdbout = f'{pathname}.vis.first.pdb'
 
         with TemporaryDirectory() as path:
-            pdbin, topin = self.write(path)
+            pdbin, topin, _ = self.write(path)
             mdp_tmp=f'{path}/trjconv.mdp'
             tpr_tmp=f'{path}/trjconv.tpr'
             mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
@@ -692,6 +750,7 @@ class GMXLinkerSystem():
                 cmd='grompp',
                 stdin='',
                 cwd=cwd,
+                log_files=False,
                 f=mdp_tmp,
                 c=pdbin,
                 p=topin,
@@ -701,6 +760,7 @@ class GMXLinkerSystem():
                 cmd='trjconv',
                 stdin='Protein\nSystem\n',
                 cwd=cwd,
+                log_files=False,
                 f=filename,
                 s=tpr_tmp,
                 o=trajout_tmp,
@@ -713,6 +773,7 @@ class GMXLinkerSystem():
                     cmd='trjconv',
                     stdin='System\n',
                     cwd=cwd,
+                    log_files=False,
                     f=trajout_tmp,
                     s=tpr_tmp,
                     o=pdbout,
@@ -722,6 +783,7 @@ class GMXLinkerSystem():
                     cmd='trjconv',
                     stdin='C-alpha\nsystem\n',
                     cwd=cwd,
+                    log_files=False,
                     f=trajout_tmp,
                     s=tpr_tmp,
                     o=trajout,
@@ -737,7 +799,7 @@ class GMXLinkerSystem():
     def load_pdb(self, filename):
         self.traj = md.load_pdb(filename, no_boxchk=True, standard_names=False)
         with TemporaryDirectory() as path:
-            pdbin, topin = self.write(path)
+            pdbin, topin, _ = self.write(path)
             pdbout = f'{self.name}.vis.pdb'
             mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
             mdp.write(f'{path}/trjconv.mdp')
@@ -765,7 +827,7 @@ class GMXLinkerSystem():
             self.traj = md.load_pdb(f'{path}/{pdbout}', no_boxchk=True, standard_names=False)
 
     def run_sim(self, mdp, deffnm, cwd='.'):
-        pdbin, topinout = self.write(f'{cwd}')
+        pdbin, topinout, _ = self.write(f'{cwd}')
         tprinout = f'{cwd}/{deffnm}.tpr'
         mdpinout = f'{cwd}/{deffnm}.mdp'
 
@@ -794,3 +856,124 @@ class GMXLinkerSystem():
 
     def load_xtc(self, filename):
         return md.load_xtc(filename, top=self.traj.top)
+
+    @property
+    def ladder(self):
+        if self._ladder:
+            return self._ladder
+
+        return calc_temps(
+            self.min_temp,
+            self.max_temp,
+            self.num_reps,
+            method=self.ladder_method
+        )
+
+    def prep_rest2(self, deffnm, path, mdp, startframes):
+        rpath = os.path.abspath(path)
+
+        if isinstance(startframes, md.Trajectory) and len(startframes) == 1:
+            frame_iter = iter(startframes)
+        elif self.num_reps == len(startframes):
+            frame_iter = iter(startframes)
+        else:
+            raise ValueError(f'Give either one frame or {self.num_reps} frames')
+
+        try:
+            os.mkdir(rpath)
+        except:
+            pass
+        for t in self.ladder:
+            tstr = f'{t:.2f}'
+            tpath = f'{rpath}/{tstr}'
+
+            try:
+                os.mkdir(tpath)
+            except:
+                pass
+
+            coordin = f'{tpath}/{deffnm}.start.gro'
+            frame = next(frame_iter)
+            try:
+                frame.save(f'{tpath}/{deffnm}.start.gro')
+            except AttributeError:
+                coordin = os.path.abspath(frame)
+
+            mdpin = f'{tpath}/{deffnm}.mdp'
+            mdp.set_temperature(self.min_temp)
+            mdp.write(mdpin)
+
+            topin = self.write_top(tpath)
+            base, _, ext = topin.rpartition('.')
+            topinout = f'{tpath}/{deffnm}.rest2_{tstr}.{ext}'
+            tprinout = f'{tpath}/{deffnm}.tpr'
+
+            with TemporaryDirectory() as cwd:
+                preprocessed_top = 'preproc.top'
+                _, stdout_data, stderr_data = self.call_gmx(
+                    cmd='grompp',
+                    stdin='',
+                    cwd=cwd,
+                    f=mdpin,
+                    c=coordin,
+                    p=topin,
+                    pp=f'{cwd}/{preprocessed_top}',
+                    maxwarn=1
+                )
+
+                temper_from_file(
+                    f'{cwd}/{preprocessed_top}',
+                    topinout,
+                    ['Protein_chain_A'],
+                    self.min_temp,
+                    t
+                )
+
+            with open(f'{tpath}/plumed.dat', 'w') as f:
+                f.write('# Necessary for hrex')
+
+            _, stdout_data, stderr_data = self.call_gmx(
+                cmd='grompp',
+                stdin='',
+                cwd=tpath,
+                f=mdpin,
+                c=coordin,
+                p=topinout,
+                o=tprinout,
+                maxwarn=1
+            )
+            print(stderr_data)
+            print(stdout_data)
+
+    def take_starting_strucs(self, traj, mdp, skiptime_ps=100):
+        """Take starting structures spaced throughout traj"""
+
+        nframes = len(traj)
+        skipframes = int(skiptime_ps / mdp.dt) // int(mdp.nstxout_compressed)
+        strideframes = (nframes - skipframes) // (self.num_reps - 1)
+        temp_ladder_idcs = (strideframes * i + skipframes for i in range(self.num_reps))
+        return [traj[i] for i in temp_ladder_idcs]
+
+
+    def get_properties(self, deffnm, cwd='.'):
+        df = edr_to_df(f'{cwd}/{deffnm}.edr')
+        self.call_gmx(
+            cmd='mindist',
+            stdin='Protein',
+            cwd=cwd,
+            f=f'{deffnm}.xtc',
+            s=f'{deffnm}.tpr',
+            od=f'{deffnm}.xvg',
+            pi=True
+        )
+        with open(f'{cwd}/{deffnm}.xvg') as f:
+            data = np.array([l.split() for l in f if l[0] not in '#@']).T
+        df['Min. PI dist'] = data[1]
+        df['Min. int dist'] = data[2]
+
+        traj = self.load_xtc(f'{cwd}/{deffnm}.vis.xtc')
+        calpha_atom_indices = traj.top.select_atom_indices('alpha')
+        rmsd = md.rmsd(traj, self.traj, atom_indices=calpha_atom_indices)
+        df['RMSD'] = rmsd
+
+        return (traj, df)
