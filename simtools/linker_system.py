@@ -322,12 +322,14 @@ class GMXLinkerSystem():
         self,
         sequence,
         ffpath,
+        mdmdp,
+        emmdp=None,
         name=None,
         wd=None,
         min_temp=300.0,
         max_temp=300.0,
         num_reps=1,
-        exchange_freq=10
+        exchange_freq=10,
     ):
         self.seq = sequence
 
@@ -350,6 +352,15 @@ class GMXLinkerSystem():
         self.num_reps = num_reps
         self.ladder_method = 'GEOMETRIC'
         self.exchange_freq = exchange_freq
+
+        self.mdp = mdmdp.copy()
+        self.mdp.set_temperature(self.min_temp)
+
+        if emmdp is None:
+            emmdp = mdmdp.copy()
+            emmdp.integrator = 'steep'
+
+        self.em_mdp = emmdp.copy()
 
     def initialise(self):
         with TemporaryDirectory() as td:
@@ -519,7 +530,12 @@ class GMXLinkerSystem():
         cmd_is_mdrun = cmd in mdrun_synonyms
 
         if mpiranks:
-            args = ['mpirun', '-np', str(mpiranks), 'mdrun_mpi'] + args[2:]
+            args = [
+                'mpirun',
+                '--use-hwthread-cpus',
+                '-np', str(mpiranks),
+                'mdrun_mpi'
+            ] + args[2:]
 
         path = cwd if cwd is not None else '.'
         if 'deffnm' in kwargs:
@@ -672,8 +688,7 @@ class GMXLinkerSystem():
             mol_water = 55.5
             desired_salt_conc = conc
             n_salt = int(round(n_wat * desired_salt_conc / mol_water))
-            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
-            mdp.write(f'{path}/genion.mdp')
+            self.em_mdp.write(f'{path}/genion.mdp')
 
             _, stdout_data, stderr_data = self.call_gmx(
                 cmd='grompp',
@@ -707,10 +722,9 @@ class GMXLinkerSystem():
             pdbout = 'em.pdb'
             tpr_tmp = 'em.tpr'
 
-            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
-            mdp.write(f'{path}/em.mdp')
+            self.em_mdp.write(f'{path}/em.mdp')
 
-            print(f'Energy minimising with .MDP file:\n{mdp.write()}')
+            print(f'Energy minimising with .MDP file:\n{self.em_mdp.write()}')
 
             _, stdout_data, stderr_data = self.call_gmx(
                 cmd='grompp',
@@ -744,8 +758,7 @@ class GMXLinkerSystem():
             pdbin, topin, _ = self.write(path)
             mdp_tmp=f'{path}/trjconv.mdp'
             tpr_tmp=f'{path}/trjconv.tpr'
-            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
-            mdp.write(mdp_tmp)
+            self.em_mdp.write(mdp_tmp)
             self.call_gmx(
                 cmd='grompp',
                 stdin='',
@@ -801,8 +814,7 @@ class GMXLinkerSystem():
         with TemporaryDirectory() as path:
             pdbin, topin, _ = self.write(path)
             pdbout = f'{self.name}.vis.pdb'
-            mdp = MDP20183(f'{path}/{self.ff.name}.ff/em.mdp')
-            mdp.write(f'{path}/trjconv.mdp')
+            self.em_mdp.write(f'{path}/trjconv.mdp')
             tpr_tmp='trjconv.tpr'
             _, stdout_data, stderr_data = self.call_gmx(
                 cmd='grompp',
@@ -831,6 +843,9 @@ class GMXLinkerSystem():
         tprinout = f'{cwd}/{deffnm}.tpr'
         mdpinout = f'{cwd}/{deffnm}.mdp'
 
+        if mdp is None:
+            mdp = self.mdp
+
         mdp.write(mdpinout)
         print(f'Running simulation with .MDP file:\n{mdp.write()}')
 
@@ -854,8 +869,8 @@ class GMXLinkerSystem():
         )
         self.trajvis(f'{cwd}/{deffnm}.xtc')
 
-    def load_xtc(self, filename):
-        return md.load_xtc(filename, top=self.traj.top)
+    def load_xtc(self, filename, **kwargs):
+        return md.load_xtc(filename, top=self.traj.top, **kwargs)
 
     @property
     def ladder(self):
@@ -900,6 +915,9 @@ class GMXLinkerSystem():
                 coordin = os.path.abspath(frame)
 
             mdpin = f'{tpath}/{deffnm}.mdp'
+            if mdp is None:
+                mdp = self.mdp
+            mdp = mdp.copy()
             mdp.set_temperature(self.min_temp)
             mdp.write(mdpin)
 
@@ -945,8 +963,10 @@ class GMXLinkerSystem():
             print(stderr_data)
             print(stdout_data)
 
-    def take_starting_strucs(self, traj, mdp, skiptime_ps=100):
+    def take_starting_strucs(self, traj, mdp=None, skiptime_ps=100):
         """Take starting structures spaced throughout traj"""
+        if mdp is None:
+            mdp = self.mdp
 
         nframes = len(traj)
         skipframes = int(skiptime_ps / mdp.dt) // int(mdp.nstxout_compressed)
@@ -954,26 +974,40 @@ class GMXLinkerSystem():
         temp_ladder_idcs = (strideframes * i + skipframes for i in range(self.num_reps))
         return [traj[i] for i in temp_ladder_idcs]
 
-
-    def get_properties(self, deffnm, cwd='.'):
-        df = edr_to_df(f'{cwd}/{deffnm}.edr')
+    def get_properties(self, deffnm, cwd='.', stride=1, mdp=None):
+        if mdp is None:
+            mdp = self.mdp
         self.call_gmx(
             cmd='mindist',
             stdin='Protein',
             cwd=cwd,
             f=f'{deffnm}.xtc',
             s=f'{deffnm}.tpr',
-            od=f'{deffnm}.xvg',
-            pi=True
+            od=f'{deffnm}.mindist.xvg',
+            pi=True,
+            dt=float(mdp.nstenergy) * float(mdp.dt) * stride,
+            log_files=False
         )
-        with open(f'{cwd}/{deffnm}.xvg') as f:
-            data = np.array([l.split() for l in f if l[0] not in '#@']).T
-        df['Min. PI dist'] = data[1]
-        df['Min. int dist'] = data[2]
+        with open(f'{cwd}/{deffnm}.mindist.xvg') as f:
+            data = np.array([
+                [float(s) for s in l.split()]
+                for l in f if l[0] not in '#@'
+            ]).T
+        df = edr_to_df(f'{cwd}/{deffnm}.edr')[::stride]
+        traj = self.load_xtc(f'{cwd}/{deffnm}.vis.xtc', stride=stride)
 
-        traj = self.load_xtc(f'{cwd}/{deffnm}.vis.xtc')
+        minlen = min(data.shape[1], len(df), len(traj))
+        df = df.head(minlen)
+        data = data[..., :minlen]
+        traj = traj[:minlen]
+        if not (np.array_equal(df['Time'], data[0]) and np.array_equal(df['Time'], traj.time)):
+            raise ValueError("Could not match times across different inputs")
+
         calpha_atom_indices = traj.top.select_atom_indices('alpha')
         rmsd = md.rmsd(traj, self.traj, atom_indices=calpha_atom_indices)
+
+        df['Min. PI dist'] = data[1]
+        df['Max. int dist'] = data[2]
         df['RMSD'] = rmsd
 
         return (traj, df)
