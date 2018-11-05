@@ -9,6 +9,7 @@ from datetime import datetime
 import sys
 import io
 import os
+from itertools import cycle
 
 import mdtraj as md
 
@@ -838,7 +839,7 @@ class GMXLinkerSystem():
             )
             self.traj = md.load_pdb(f'{path}/{pdbout}', no_boxchk=True, standard_names=False)
 
-    def run_sim(self, mdp, deffnm, cwd='.'):
+    def run_sim(self, mdp, deffnm, cwd='.', **kwargs):
         pdbin, topinout, _ = self.write(f'{cwd}')
         tprinout = f'{cwd}/{deffnm}.tpr'
         mdpinout = f'{cwd}/{deffnm}.mdp'
@@ -865,7 +866,8 @@ class GMXLinkerSystem():
             stdin='',
             cwd=cwd,
             deffnm=deffnm,
-            v=True
+            v=True,
+            **kwargs
         )
         self.trajvis(f'{cwd}/{deffnm}.xtc')
 
@@ -888,7 +890,7 @@ class GMXLinkerSystem():
         rpath = os.path.abspath(path)
 
         if isinstance(startframes, md.Trajectory) and len(startframes) == 1:
-            frame_iter = iter(startframes)
+            frame_iter = cycle(startframes)
         elif self.num_reps == len(startframes):
             frame_iter = iter(startframes)
         else:
