@@ -838,7 +838,7 @@ class GMXLinkerSystem():
             )
             self.traj = md.load_pdb(f'{path}/{pdbout}', no_boxchk=True, standard_names=False)
 
-    def run_sim(self, mdp, deffnm, cwd='.'):
+    def run_sim(self, mdp, deffnm, cwd='.', **kwargs):
         pdbin, topinout, _ = self.write(f'{cwd}')
         tprinout = f'{cwd}/{deffnm}.tpr'
         mdpinout = f'{cwd}/{deffnm}.mdp'
@@ -865,7 +865,8 @@ class GMXLinkerSystem():
             stdin='',
             cwd=cwd,
             deffnm=deffnm,
-            v=True
+            v=True,
+            **kwargs
         )
         self.trajvis(f'{cwd}/{deffnm}.xtc')
 
@@ -974,40 +975,51 @@ class GMXLinkerSystem():
         temp_ladder_idcs = (strideframes * i + skipframes for i in range(self.num_reps))
         return [traj[i] for i in temp_ladder_idcs]
 
-    def get_properties(self, deffnm, cwd='.', stride=1, mdp=None):
+    def get_properties(self, deffnm, cwd='.', stride=1, mdp=None, mindist=True):
         if mdp is None:
             mdp = self.mdp
-        self.call_gmx(
-            cmd='mindist',
-            stdin='Protein',
-            cwd=cwd,
-            f=f'{deffnm}.xtc',
-            s=f'{deffnm}.tpr',
-            od=f'{deffnm}.mindist.xvg',
-            pi=True,
-            dt=float(mdp.nstenergy) * float(mdp.dt) * stride,
-            log_files=False
-        )
-        with open(f'{cwd}/{deffnm}.mindist.xvg') as f:
-            data = np.array([
-                [float(s) for s in l.split()]
-                for l in f if l[0] not in '#@'
-            ]).T
+
+        if mindist:
+            self.call_gmx(
+                cmd='mindist',
+                stdin='Protein',
+                cwd=cwd,
+                f=f'{deffnm}.xtc',
+                s=f'{deffnm}.tpr',
+                od=f'{deffnm}.mindist.xvg',
+                pi=True,
+                dt=float(mdp.nstenergy) * float(mdp.dt) * stride,
+                log_files=False
+            )
+            with open(f'{cwd}/{deffnm}.mindist.xvg') as f:
+                data = np.array([
+                    [float(s) for s in l.split()]
+                    for l in f if l[0] not in '#@'
+                ]).T
         df = edr_to_df(f'{cwd}/{deffnm}.edr')[::stride]
         traj = self.load_xtc(f'{cwd}/{deffnm}.vis.xtc', stride=stride)
 
-        minlen = min(data.shape[1], len(df), len(traj))
+        if mindist:
+            minlen = min(data.shape[1], len(df), len(traj))
+        else:
+            minlen = min(len(df), len(traj))
+
         df = df.head(minlen)
-        data = data[..., :minlen]
+        if mindist:
+            data = data[..., :minlen]
         traj = traj[:minlen]
-        if not (np.array_equal(df['Time'], data[0]) and np.array_equal(df['Time'], traj.time)):
+        if not (
+            ((not mindist) or np.array_equal(df['Time'], data[0]))
+            and np.array_equal(df['Time'], traj.time)
+        ):
             raise ValueError("Could not match times across different inputs")
 
         calpha_atom_indices = traj.top.select_atom_indices('alpha')
         rmsd = md.rmsd(traj, self.traj, atom_indices=calpha_atom_indices)
 
-        df['Min. PI dist'] = data[1]
-        df['Max. int dist'] = data[2]
+        if mindist:
+            df['Min. PI dist'] = data[1]
+            df['Max. int dist'] = data[2]
         df['RMSD'] = rmsd
 
         return (traj, df)
