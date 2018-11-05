@@ -9,6 +9,7 @@ from datetime import datetime
 import sys
 import io
 import os
+from itertools import cycle
 
 import mdtraj as md
 
@@ -889,7 +890,7 @@ class GMXLinkerSystem():
         rpath = os.path.abspath(path)
 
         if isinstance(startframes, md.Trajectory) and len(startframes) == 1:
-            frame_iter = iter(startframes)
+            frame_iter = cycle(startframes)
         elif self.num_reps == len(startframes):
             frame_iter = iter(startframes)
         else:
