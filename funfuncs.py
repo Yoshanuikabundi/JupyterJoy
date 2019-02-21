@@ -1,6 +1,49 @@
 from copy import copy
 import mdtraj as md
+import subprocess
+import os
+from urllib.request import urlretrieve
+from tempfile import TemporaryDirectory
 
+
+def get_env_from_sh(scriptfn, shell='sh', inheritenv=False):
+    """Get a dict containing the environment after sourcing scriptfn"""
+    if not os.path.isfile(scriptfn):
+        raise ValueError(f'{scriptfn}: file does not exist')
+
+    if inheritenv:
+         command = f'{shell} -c ". {scriptfn} && env"'
+    else:
+         command = f'env -i {shell} -c ". {scriptfn} && env"'
+
+    env_out = {}
+    for line in subprocess.getoutput(command).split("\n"):
+        key, value = line.split("=")
+        env_out[key]= value
+    return env_out
+
+def source(scriptfn, shell='sh'):
+    """Modify the environment as if we'd sourced scriptfn"""
+    os.environ.update(get_env_from_sh(scriptfn, shell=shell, inheritenv=True))
+
+
+class WorkingDirectory():
+    """Context manager that cds in and out on enter/exit"""
+    def __init__(self, target_dir):
+        os.makedirs(target_dir, exist_ok=True)
+        self.target_dir = target_dir
+        self.init_dir = os.getcwd()
+
+    def __enter__(self):
+        os.chdir(self.target_dir)
+        return os.getcwd()
+
+    def __exit__(self, *args):
+        os.chdir(self.init_dir)
+
+def addpath(line):
+    os.environ['PATH'] = line + ':' + os.environ['PATH']
+    return os.environ['PATH']
 
 def make_martini_ndx(top, f=None):
     """Construct a gromacs ndx file from a martini MDTraj topology"""
@@ -120,13 +163,81 @@ class BatchNGLViewRenderer(Generator):
         return self.out
 
 
-def md_load(*args, **kwargs):
-    '''Call mdtraj.load with sane defaults'''
+def md_load(
+    filename_or_filenames,
+    discard_overlapping_frames=True,
+    selection=None,
+    chunks=0,
+    **kwargs
+):
+    '''Call mdtraj.(iter)load with more convenience
+
+    If you want speed/efficiency, do it manually - this is designed to
+    be flexible and convenient. For instance, if you ask for a selection
+    without a topology, the file will be loaded twice!'''
+    if chunks:
+        loader = md.iterload
+        kwargs["chunks"] = chunks
+    else:
+        loader = md.load
+
+    kwargs["discard_overlapping_frames"] = discard_overlapping_frames
     pdbkwargs = dict(standard_names=False, no_boxchk=True)
+
+    # Load the topology with the same logic
+    top = kwargs.pop("top", None)
+    if top:
+        if isinstance(top, md.Trajectory):
+            top = top.top
+        elif not isinstance(top, md.Topology):
+            top = md_load(top).top
+        kwargs["top"] = top
+
+    # Allow only a subset to be loaded by selection
+    atom_indices = kwargs.pop("atom_indices", None)
+    if selection and atom_indices:
+        raise ValueError("Specify selection or indices, not both")
+    elif selection and not top:
+        atom_indices = md_load(
+            filename_or_filenames,
+            stride=999999
+        ).top.select(selection)
+    elif selection:
+        atom_indices = top.select(selection)
+    kwargs["atom_indices"] = atom_indices
+
     pdbkwargs.update(kwargs)
     try:
         # If it's a pdb, just load it without trying to be clever
-        return md.load(*args, **pdbkwargs)
+        return loader(filename_or_filenames, **pdbkwargs)
     except TypeError:
         # Not a pdb, so use the defaults
-        return md.load(*args, **kwargs)
+        return loader(filename_or_filenames, **kwargs)
+
+
+def unwrap(iterator):
+    '''Get the sole element of iterator or raise a ValueError'''
+    i = iter(iterator)
+    try:
+        out = next(i)
+    except StopIteration:
+        raise ValueError("i has no elements")
+    try:
+        next(i)
+    except StopIteration:
+        return out
+    raise ValueError("i has more than one element")
+
+
+def get_pdbs(*pdbs, **kwargs):
+    with TemporaryDirectory() as td:
+        for pdb in pdbs:
+            url = f"http://files.rcsb.org/view/{pdb}.pdb"
+            path = f"{td}/{pdb}.pdb"
+            urlretrieve(url, path)
+            traj = md.load_pdb(path, **kwargs)
+            yield traj
+
+def pdbget(pdb, **kwargs):
+    return unwrap(get_pdbs(pdb))
+
