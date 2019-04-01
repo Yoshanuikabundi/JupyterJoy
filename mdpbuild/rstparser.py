@@ -5,18 +5,6 @@ import docutils.utils
 from copy import deepcopy
 import re
 
-class ReadOnlyDict(Mapping):
-    def __init__(self, data):
-        self.__data__ = data
-    def __getitem__(self, key):
-        return self.__data__[key]
-    def __len__(self):
-        return len(self.__data__)
-    def __iter__(self):
-        return iter(self.__data__)
-    def __repr__(self):
-        return 'ReadOnlyDict({})'.format(repr(self.__data__))
-
 _mdp_entries = OrderedDict()
 
 def content_to_str(content):
@@ -57,13 +45,13 @@ class MDPDirective(MDPDirectiveBase):
             content_doc = parse_rst_string(content)
         docstring, default, units = self.process_content_doc(content_doc)
         name = process_name(self.arguments[0])
-        self.mdp_entries[name] = ReadOnlyDict({
+        self.mdp_entries[name] = {
             "docname": self.arguments[0],
             "docstring": docstring,
             "options": options_dict,
             "default": default,
             "units": units
-        })
+        }
         return []
 
     @staticmethod

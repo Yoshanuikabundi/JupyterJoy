@@ -17,6 +17,8 @@ from JupyterJoy.mdpbuild.mdp import MDP20183
 from JupyterJoy.tophat import Topology
 from JupyterJoy.simtools.prep_remd import calc_temps
 from JupyterJoy.simtools.rest2 import temper_from_file
+from JupyterJoy.simtools.gromacs_system import GmxRest2System
+from JupyterJoy.funfuncs import unwrap
 
 import PeptideBuilder as pb
 import Bio.PDB
@@ -35,18 +37,6 @@ def make_extended_peptide(seq):
     for aa in seq_iter:
         structure = pb.add_residue(structure, geo(aa))
     return structure
-
-def unwrap(iterator):
-    i = iter(iterator)
-    try:
-        out = next(i)
-    except StopIteration:
-        raise ValueError("i has no elements")
-    try:
-        next(i)
-    except StopIteration:
-        return out
-    raise ValueError("i has more than one element")
 
 def replace_children(entity, new_children):
     for child in entity.get_list():
@@ -318,19 +308,80 @@ GMXJobLog = namedtuple('GMXJob', ['files', 'stdin', 'stdout', 'stderr'])
 BoxLog = namedtuple('BoxLog', ['boxtype', 'd', 'vectors'])
 PickleLog = namedtuple('PickleLog', ['time'])
 
+class GmxLinkerSystem(GmxRest2System):
+    def __init__(
+        self,
+        sequence,
+        ffpath,
+        mdmdp,
+        watermodel='tips3p',
+        emmdp=None,
+        name=None,
+        min_temp=300.0,
+        max_temp=300.0,
+        num_reps=1,
+        exchange_freq=100,
+    ):
+        self.seq = sequence
+
+        name = sequence if name is None else name
+
+        structure = make_extended_capped_peptide(sequence)
+        traj = bio_struct_to_mdtraj(structure)
+
+        super().__init__(
+            name,
+            traj,
+            ffpath,
+            mdmdp,
+            watermodel=watermodel,
+            emmdp=emmdp,
+            min_temp=min_temp,
+            max_temp=max_temp,
+            num_reps=num_reps,
+            exchange_freq=exchange_freq,
+        )
+
+
+    def initialise_aa(self):
+        if self.ff is None:
+            raise ValueError("Cannot initialize an AA system without a force field")
+        with TemporaryDirectory() as td:
+            self.ff.write(td)
+            pdbin = 'extended.pdb'
+            pdbout = 'extended_gmx.pdb'
+            topout = 'topol.top'
+            self.traj.save(f'{td}/{pdbin}')
+            _, stdout_data, stderr_data = self.call_gmx(
+                cmd='pdb2gmx',
+                stdin='3\n5\n',
+                cwd=td,
+                f=pdbin,
+                o=pdbout,
+                p=topout,
+                water=self.watermodel,
+                ter=True,
+                ignh=True,
+                ff=self.ff.name
+            )
+            print(stderr_data)
+            print(stdout_data)
+            self.topol = TopolWithItps(f'{td}/{topout}')
+            self.traj = md.load_pdb(f'{td}/{pdbout}', no_boxchk=True, standard_names=False)
+
 class GMXLinkerSystem():
     def __init__(
         self,
         sequence,
         ffpath,
         mdmdp,
+        watermodel='tips3p',
         emmdp=None,
         name=None,
-        wd=None,
         min_temp=300.0,
         max_temp=300.0,
         num_reps=1,
-        exchange_freq=10,
+        exchange_freq=100,
     ):
         self.seq = sequence
 
@@ -339,20 +390,25 @@ class GMXLinkerSystem():
         structure = make_extended_capped_peptide(sequence)
         self._traj = bio_struct_to_mdtraj(structure)
 
-        self.ff_path = os.path.abspath(ffpath)
-        self.ff = GMXForceField(self.ff_path)
-        self.watermodel = 'tips3p'
+        if ffpath is None:
+            self.ff_path = None
+            self.ff = None
+        else:
+            self.ff_path = os.path.abspath(ffpath)
+            self.ff = GMXForceField(self.ff_path)
+        self.watermodel = watermodel
         boxbuffer = 1.2
 
         self.log = []
         self._pickle_path = None
 
         self._ladder = []
-        self.min_temp = min_temp
-        self.max_temp = max_temp
-        self.num_reps = num_reps
-        self.ladder_method = 'GEOMETRIC'
+        self._min_temp = min_temp
+        self._max_temp = max_temp
+        self._num_reps = num_reps
+        self._ladder_method = 'GEOMETRIC'
         self.exchange_freq = exchange_freq
+        self._nstlist = None
 
         self.mdp = mdmdp.copy()
         self.mdp.set_temperature(self.min_temp)
@@ -364,6 +420,8 @@ class GMXLinkerSystem():
         self.em_mdp = emmdp.copy()
 
     def initialise(self):
+        if self.ff is None:
+            raise ValueError("Cannot initialize an AA system without a force field")
         with TemporaryDirectory() as td:
             self.ff.write(td)
             pdbin = 'extended.pdb'
@@ -440,7 +498,7 @@ class GMXLinkerSystem():
         c = (d/2.0, d/2.0, sqrt(2.0)*d/2.0)
         vecs = np.array(len(self.traj) * [[a, b, c]])
         if self.traj.unitcell_vectors is not None:
-            raise ValueError(f'self.traj already has a unit cell: {traj.unitcell_vectors}')
+            raise ValueError(f'self.traj already has a unit cell: {self.traj.unitcell_vectors}')
         self.traj.unitcell_vectors = vecs
         self.log.append(BoxLog(
             'rhombic dodecahedron (xy-square)',
@@ -661,7 +719,7 @@ class GMXLinkerSystem():
             except TypeError:
                 return [f"-{key}", str(value)]
 
-    def solvate(self):
+    def solvate(self, **kwargs):
         with TemporaryDirectory() as path:
             pdbin, topinout, _ = self.write(path)
             pdbout = 'extended_sol.pdb'
@@ -672,7 +730,7 @@ class GMXLinkerSystem():
                 cp=pdbin,
                 o=pdbout,
                 p=topinout,
-                cs=f'{self.ff.name}.ff/tips3p884.gro'
+                **kwargs
             )
             print(stderr_data)
             print(stdout_data)
@@ -750,6 +808,9 @@ class GMXLinkerSystem():
             self.load_pdb(f'{path}/{pdbout}')
 
     def trajvis(self, filename, cwd=None):
+        filename = os.path.abspath(filename)
+        if not os.path.exists(filename):
+            raise ValueError(f'File does not exist: {filename}')
         pathname, _, extension = filename.rpartition('.')
         trajout_tmp = f'{pathname}.tmp.{extension}'
         trajout = f'{pathname}.vis.{extension}'
@@ -874,6 +935,7 @@ class GMXLinkerSystem():
     def load_xtc(self, filename, **kwargs):
         return md.load_xtc(filename, top=self.traj.top, **kwargs)
 
+
     @property
     def ladder(self):
         if self._ladder:
@@ -885,6 +947,66 @@ class GMXLinkerSystem():
             self.num_reps,
             method=self.ladder_method
         )
+
+    @property
+    def min_temp(self):
+        if self._ladder:
+            return self._ladder[0]
+
+        return self._min_temp
+
+    @property
+    def max_temp(self):
+        if self._ladder:
+            return self._ladder[-1]
+
+        return self._max_temp
+
+    @property
+    def num_reps(self):
+        if self._ladder:
+            return len(self._ladder)
+
+        return self._num_reps
+
+    @property
+    def ladder_method(self):
+        if self._ladder:
+            return 'SPECIFIED'
+
+        return self._ladder_method
+
+    @property
+    def nstlist(self):
+        ex_freq = self.exchange_freq
+        nstlist = self._nstlist
+
+        if nstlist and ex_freq % nstlist == 0:
+            return nstlist
+        elif nstlist:
+            raise ValueError(
+                "nstlist {nstlist} doesn't divide exchange_freq {ex_freq}"
+            )
+        elif ex_freq % 100 == 0:
+            return 100
+        else:
+            raise ValueError('You should manually specify nstlist')
+
+        return self._ladder_method
+
+    @nstlist.setter
+    def nstlist(self, value):
+        ex_freq = self.exchange_freq
+        if value % ex_freq == 0:
+            self._nstlist = value
+        else:
+            raise ValueError(
+                "nstlist {value} doesn't divide exchange_freq {ex_freq}"
+            )
+
+    @nstlist.deleter
+    def nstlist(self, value):
+        self._nstlist = None
 
     def prep_rest2(self, deffnm, path, mdp, startframes):
         rpath = os.path.abspath(path)
@@ -901,7 +1023,10 @@ class GMXLinkerSystem():
         except:
             pass
         for t in self.ladder:
-            tstr = f'{t:.2f}'
+            if isinstance(t, str):
+                tstr = t
+            else:
+                tstr = f'{t:.2f}'
             tpath = f'{rpath}/{tstr}'
 
             try:
@@ -945,8 +1070,8 @@ class GMXLinkerSystem():
                     f'{cwd}/{preprocessed_top}',
                     topinout,
                     ['Protein_chain_A'],
-                    self.min_temp,
-                    t
+                    float(self.min_temp),
+                    float(t)
                 )
 
             with open(f'{tpath}/plumed.dat', 'w') as f:

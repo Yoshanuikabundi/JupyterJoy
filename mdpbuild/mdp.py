@@ -1,5 +1,5 @@
 from collections import OrderedDict, Mapping
-from .rstparser import parse_rst_file, ReadOnlyDict, process_name
+from .rstparser import parse_rst_file, process_name
 import os
 import re
 from numbers import Number
@@ -32,15 +32,13 @@ class MDPBase():
     """Base class for creating MDP files"""
     obsoletes = set([])
     @classmethod
-    def create_subclass_from_doc(cls, name, docpath, gromppcmd="gmx grompp", mdruncmd="gmx mdrun"):
+    def create_subclass_from_doc(cls, name, docpath):
         """Create an MDP class from a mdp-options.rst file distributed with GROMACS"""
         mdp_entries, doc = parse_rst_file(docpath)
         attr = {
             'options': mdp_entries,
             'doc': doc,
-            'obsoletes': copy(cls.obsoletes),
-            'gromppcmd': gromppcmd,
-            'mdruncmd': mdruncmd
+            'obsoletes': copy(cls.obsoletes)
         }
         return type(name, (cls,), attr)
 
@@ -283,13 +281,13 @@ class MDPBase():
         if newname:
             _, obs_dict = cls._get_mdp_entry(newname)
         else:
-            obs_dict = ReadOnlyDict({
+            obs_dict = {
                 "docname": name,
                 "docstring": docstring,
                 "options": OrderedDict(),
                 "default": 'Obsolete',
                 "units": None
-            })
+            }
         try:
             cls._get_mdp_entry(name)
         except AttributeError:
@@ -304,48 +302,55 @@ class MDPBase():
         setattr(cls, func.__name__, func)
         return func
 
-    # def setup_sim(self, name, structure, topology, **kwargs):
-    #     try:
-    #         strucname = f"{name}_start.pdb"
-    #         structure.save(strucname)
-    #     except AttributeError:
-    #         strucname = str(structure)
+    @classmethod
+    def def_series(cls, pattern, start=1, stop=10):
+        '''Define a series of values
 
-    #     self.write(tofile=f'{name}.mdp')
+        Pattern should be a regex string with a single capture group.
+        All mdp options matching the regex pattern will have new copies
+        added replacing the capture group with numbers taken from
+        range(start, stop).'''
+        pattern = re.compile(pattern)
+        if pattern.groups != 1:
+            raise ValueError('pattern should have exactly 1 capture group')
+        new_options = {}
+        for opt, opt_dict in cls.options.items():
+            m = pattern.match(opt)
+            if m:
+                idx1, idx2 = m.span(1)
+                bef_grp = m.string[:idx1]
+                aft_grp = m.string[idx2:]
+                for i in range(start, stop):
+                    name = bef_grp + str(i) + aft_grp
+                    docname_iter = iter(opt_dict['docname'])
+                    docname = (
+                        insert_breaks(docname_iter, bef_grp)
+                        + str(i)
+                        + insert_breaks(docname_iter, aft_grp)
+                    )
+                    new_dict = dict(opt_dict)
+                    new_dict['docname'] = docname
+                    new_options[name] = new_dict
+        for k in new_options.keys():
+            try:
+                del cls.options[k]
+            except KeyError:
+                pass
+        cls.options.update(new_options)
 
-
-    #     kwargs.setdefault('c', strucname)
-    #     kwargs.setdefault('p', topology)
-    #     kwargs.setdefault('o', name)
-    #     kwargs.setdefault('f', name)
-
-    #     gromppline = self.gromppcmd + " "
-    #     gromppline += " ".join([f"-{k} {v}" for k,v in kwargs.items()])
-
-    #     ip = get_ipython()
-    #     pb = ip.find_magic('pb')
-    #     pb(gromppline)
-    #     return f"{self.mdruncmd} -v -deffnm {name}"
-
-    # def run_sim(self, name, *args, **kwargs):
-    #     mdrunline = self.setup_sim(name, *args, **kwargs)
-
-    #     ip = get_ipython()
-    #     pb = ip.find_magic('pb')
-    #     pb(mdrunline)
-
-    #     try:
-    #         traj = md.load("{}.xtc".format(name), top="{}.gro".format(name))
-    #         return traj
-    #     except OSError:
-    #         return None
-
-    # def extend_sim(self, name, time_ns, *args, **kwargs):
-    #     old_time_ns = self.nsteps * self.dt / 1000
-    #     self.set_time(self.dt*1000, time_ns)
-    #     mdrunline = self.setup_sim(self, name, *args, **kwargs)
-    #     self.set_time(self.dt*1000, old_time_ns)
-    #     return mdrunline + " -cpi"
+def insert_breaks(source, dest):
+    """Insert - and _ from source into the same position in dest"""
+    dest = iter(dest)
+    out = ''
+    for c in source:
+        if c in '-_':
+            out += c
+        else:
+            try:
+                out += next(dest)
+            except StopIteration:
+                break
+    return out
 
 
 gmxdocs_path = os.path.dirname(__file__) + "/gmxdocs"
@@ -370,6 +375,14 @@ for cls in gmx_2018_series:
     cls.add_obsolete('nstxtcout', 'nstxout-compressed')
     cls.add_obsolete('xtc-precision', 'compressed-x-precision')
     cls.add_obsolete('xtc-grps', 'compressed-x-grps')
+
+    cls.def_series('pullgroup(1)', start=1, stop=20)
+    cls.def_series('pullcoord(1)', start=1, stop=10)
+    cls.def_series('awh(1)', start=1, stop=10)
+    cls.def_series('awh[1-9]+dim(1)', start=1, stop=5)
+    cls.def_series('rot[a-z]+(0)', start=1, stop=10)
+
+    MDP20183.options['awh1sharegroup']['options'] = OrderedDict()
 
     @cls.add_method
     def remove_pcouple(self):
@@ -422,7 +435,10 @@ for cls in gmx_2018_series:
                 "This is an simulated tempering simulation, set temps by hand"
             )
 
-        temp_str = f'{temp:.2f}'
+        if isinstance(temp, str):
+            temp_str = temp
+        else:
+            temp_str = f'{temp:.2f}'
 
         num_groups = len(self.tc_grps.split())
         self.ref_t = ' '.join([temp_str] * num_groups)
@@ -457,7 +473,7 @@ for cls in gmx_2018_series:
         for s, o in output_freqs:
             o = int(Default.unwrap(o))
             if o and nsteps % o:
-                raise ValueError(f'dt={nsteps} is not divisible by {s}={o}')
+                raise ValueError(f'nsteps={nsteps} is not divisible by {s}={o}')
 
         self.dt = dt_ps
         self.nsteps = nsteps

@@ -21,14 +21,15 @@ class Topology:
         if not self.name:
             raise ValueError("GROMACS topology must have a name!")
 
-        out = list(self.unparsed)
-        out += ['']
-        out += ['[ system ]']
-        out += ['; name']
-        out += [self.name]
-        out += ['']
-        out += [str(self.molecules)]
-        out += ['']  # I am very proud of this line
+        out = list(self.unparsed) + [
+            '',
+            '[ system ]',
+            '; name',
+            self.name,
+            '',
+            str(self.molecules),
+            ''  # I am very proud of this line
+        ]
 
         out = [i for n, i in enumerate(out) if i != "" or out[n-1] != ""]
         return '\n'.join(out)

@@ -292,6 +292,9 @@ class MoleculesSection(MutableSequence):
         if self.__init_done:
             self.update_name2entries()
 
+    def index(self, name):
+        return list(self).index(self[name][0])
+
     def update_name2entries(self):
         self._name2entries.clear()
         for entry in self._entries:
