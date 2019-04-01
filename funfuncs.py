@@ -4,7 +4,71 @@ import subprocess
 import os
 from urllib.request import urlretrieve
 from tempfile import TemporaryDirectory
+import numpy as np
+from itertools import tee, count
+import mdtraj.core.element as elem
+from re import sub
 
+aa_tlc = [
+    'ala', 'arg', 'asn', 'asp', 'cys', 'glu', 'gln', 'gly', 'his',
+    'ile', 'leu', 'lys', 'met', 'phe', 'pro', 'ser', 'thr', 'trp',
+    'tyr', 'val'
+]
+
+aa_olc = [
+    'a', 'r', 'n', 'd', 'c', 'e', 'q', 'g', 'h',
+    'i', 'l', 'k', 'm', 'f', 'p', 's', 't', 'w',
+    'y', 'v'
+]
+
+aa_olc2tlc = {olc: tlc for olc, tlc in zip(aa_olc, aa_tlc)}
+aa_tlc2olc = {tlc: olc for olc, tlc in zip(aa_olc, aa_tlc)}
+
+
+def rand_rotation_matrices(num=1, deflection=1.0):
+    """
+    Creates an array of random rotation matrices.
+
+    num: number of rotation matrices to generate
+    deflection: the magnitude of the rotation. For 0, no rotation; for 1,
+    completely randomrotation. Small deflection => small perturbation.
+
+    Adapted from
+    http://blog.lostinmyterminal.com/python/2015/05/12/random-rotation-matrix.html
+    """
+    randnums = np.random.uniform(size=(3, num))
+
+    theta, phi, z = randnums
+
+    theta = theta * 2.0*deflection*np.pi  # Rotation about the pole (Z).
+    phi = phi * 2.0*np.pi  # For direction of pole deflection.
+    z = z * 2.0*deflection  # For magnitude of pole deflection.
+
+    # Compute a vector V used for distributing points over the sphere
+    # via the reflection I - V Transpose(V).  This formulation of V
+    # will guarantee that if x[1] and x[2] are uniformly distributed,
+    # the reflected points will be uniform on the sphere.  Note that V
+    # has length sqrt(2) to eliminate the 2 in the Householder matrix.
+
+    r = np.sqrt(z)
+    Vx, Vy, Vz = V = np.stack([
+        np.sin(phi) * r,
+        np.cos(phi) * r,
+        np.sqrt(2.0 - z)
+    ])
+
+    st = np.sin(theta)
+    ct = np.cos(theta)
+
+    row1 = np.stack([ct, st, np.zeros(num)], axis=-1)
+    row2 = np.stack([-st, ct, np.zeros(num)], axis=-1)
+    row3 = np.stack([np.zeros(num), np.zeros(num), np.ones(num)], axis=-1)
+
+    R = np.stack([row1, row2, row3], axis=-1)
+
+    # Construct the rotation matrix  ( V Transpose(V) - I ) R.
+    M = (V.T[..., None] * V.T[:, None, :] - np.eye(3)) @ R
+    return M
 
 def get_env_from_sh(scriptfn, shell='sh', inheritenv=False):
     """Get a dict containing the environment after sourcing scriptfn"""
@@ -45,12 +109,28 @@ def addpath(line):
     os.environ['PATH'] = line + ':' + os.environ['PATH']
     return os.environ['PATH']
 
+def write_dict_to_ndx(ndxdict, f):
+    for k, v in ndxdict.items():
+        f.write("[ {} ]\n".format(k))
+        for n, i in enumerate(v):
+            f.write("{: >6} ".format(i))
+            if not (n+1) % 5:
+                f.write('\n')
+        f.write("\n\n")
+
 def make_martini_ndx(top, f=None):
     """Construct a gromacs ndx file from a martini MDTraj topology"""
     ndx = {}
     for res in top.residues:
         name = res.name.upper()
         indices = [a.index+1 for a in res.atoms]
+        try:
+            ndx[name] += indices
+        except KeyError:
+            ndx[name] = indices
+    for chain in top.chains:
+        name = "chain" + chr(chain.index + 65)
+        indices = [a.index+1 for a in chain.atoms]
         try:
             ndx[name] += indices
         except KeyError:
@@ -65,18 +145,21 @@ def make_martini_ndx(top, f=None):
         + ndx.get('NC3+', [])
         + ndx.get('CA+', [])
     )
-    ndx['non-solvent'] = [
-        a.index+1 for a in top.atoms if a.index+1 not in ndx['solvent']
-    ]
+
+    protein_idcs = []
+    for aa  in aa_tlc:
+        protein_idcs += ndx.get(aa.upper(), [])
+    ndx['protein'] = sorted(protein_idcs)
+
+    ndx['non-solvent'] = sorted(in_b_but_not_a(ndx['solvent'], ndx['system']))
+    ndx['non-protein'] = sorted(in_b_but_not_a(ndx['protein'], ndx['system']))
+
     if f:
-        for k, v in ndx.items():
-            f.write("[ {} ]\n".format(k))
-            for n, i in enumerate(v):
-                f.write("{: >6} ".format(i))
-                if not (n+1) % 5:
-                    f.write('\n')
-            f.write("\n\n")
+        write_dict_to_ndx(ndx, f)
     return ndx
+
+
+
 
 
 class Generator():
@@ -240,4 +323,142 @@ def get_pdbs(*pdbs, **kwargs):
 
 def pdbget(pdb, **kwargs):
     return unwrap(get_pdbs(pdb))
+
+class Unreachable(Exception):
+    pass
+
+def in_b_but_not_a(a, b):
+    a = iter(sorted(a))
+    b = iter(sorted(b))
+    try:
+        thisa = next(a)
+        thisb = next(b)
+    except StopIteration:
+        yield from b
+    else:
+        while True:
+            step_a = False
+            step_b = False
+            if thisb < thisa:
+                yield thisb
+                step_b = True
+            elif thisb == thisa:
+                step_a = True
+                step_b = True
+            elif thisb > thisa:
+                step_a = True
+            else:
+                raise Unreachable()
+
+            if step_a:
+                try:
+                    thisa = next(a)
+                except StopIteration:
+                    if thisb != thisa:
+                        yield thisb
+                    yield from b
+                    break
+            if step_b:
+                try:
+                    thisb = next(b)
+                except StopIteration:
+                    break
+
+
+def window_gen(iterable, n):
+    "s, n -> (s0, s1, ...), (s1, s2, ...), ..., (sn, sn+1, ...)"
+    for _ in range(n-1):
+        out, iterable = tee(iterable)
+        next(iterable, None)
+        yield out
+    yield iterable
+
+def window(iterable, n):
+    "s, n -> (s0, s1, ..., sn), (s1, s2, ..., sn+1), (s2, s3, ..., sn+2), ..."
+    return zip(*window_gen(iterable, n))
+
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = tee(iterable)
+    next(b, None)
+    return zip(a, b)
+
+
+def load_gro(filename):
+    filename = os.path.abspath(filename)
+    traj = md.load(filename)
+    velxyz = np.zeros_like(traj.xyz)
+    coord_indices = None
+    top = md.Topology()
+    chain = top.add_chain()
+    residue = None
+    with open(filename) as f:
+        lines = iter(f)
+        for model in count():
+            try:
+                title = next(lines)
+            except StopIteration:
+                assert model == len(traj)
+                break
+            _, _, time = title.partition('t=')
+            n_atoms = int(next(lines))
+            assert n_atoms == traj.n_atoms
+            for i in range(n_atoms):
+                line = next(lines)
+                if model == 0:
+                    resnum = int(line[0:5])
+                    resname = line[5:10].strip()
+                    atomname = line[10:15].strip()
+                    atomnum = int(line[15:20])
+
+                    if residue is None or resnum != residue.resSeq:
+                        residue = top.add_residue(resname, chain, resSeq=resnum)
+
+                    if len(atomname) > 1:
+                        elem_symbol = atomname[0] + sub('[A-Z0-9]','',atomname[1:])
+                    else:
+                        elem_symbol = atomname
+
+                    try:
+                        element = elem.get_by_symbol(elem_symbol)
+                    except KeyError:
+                        element = elem.virtual
+                    top.add_atom(atomname, element=element, residue=residue, serial=atomnum)
+
+
+                if coord_indices is None:
+                    decs = (i for i, v in enumerate(line[20:], start=20) if v == '.')
+                    decidist = abs(next(decs) - next(decs))
+                    coord_indices = list(pairwise(range(20, 20 + decidist * 7, decidist)))
+
+                x, y, z, *vel = (float(line[a:b]) for a, b in coord_indices if b <= len(line))
+                assert np.isclose(traj.xyz[model, i, :], (x, y, z)).all()
+                if vel:
+                    velxyz[model, i, :] = vel
+            boxvecs = next(lines)
+    traj.top = top
+    if np.all(velxyz == 0.0):
+        velxyz = None
+    return traj, velxyz
+
+
+def save_gro(filename, traj, velxyz=None, force_overwrite=True, precision=3):
+    if velxyz is not None and traj.xyz.shape != velxyz.shape:
+        raise ValueError('traj.xyz and velxyz have different shapes')
+    filename = os.path.abspath(filename)
+    traj.save_gro(filename, force_overwrite=force_overwrite, precision=precision)
+
+    if velxyz is not None:
+        fstr = f'{{: >{precision+5}.{precision+1}f}}' * 3
+        coord_indices = list(pairwise(range(20, 20 + (precision + 5) * 7, (precision + 5))))
+        with open(filename, 'r') as f:
+            lines = f.readlines()
+        for model, modelvels in enumerate(velxyz):
+            for atom, atomvels in enumerate(modelvels):
+                velstr = fstr.format(*atomvels)
+                linenum = model * (velxyz.shape[1] + 2) + 2 + atom
+                lines[linenum] = lines[linenum][:-1] + velstr + lines[linenum][-1]
+        with open(filename, 'w') as f:
+            for line in lines:
+                f.write(line)
 
