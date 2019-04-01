@@ -5,6 +5,7 @@ from traitlets import Integer, Float, link, observe
 from traittypes import Array
 import nglview as nv
 from .ezfigure import EZFigure
+import numpy as np
 
 
 class TrajPlot(w.Box):
@@ -73,12 +74,19 @@ class TrajPlotTime(TrajPlot):
         kwargs.setdefault('label_x', f'Time ({unit})')
         figure = EZFigure(**kwargs)
 
-        if len(traj) != len(data_y):
+        data_y = np.asarray(data_y)
+        
+        if data_y.ndim == 1:
+            data_y = np.expand_dims(data_y, 0)
+
+        if not (data_y.ndim == 2 and data_y.shape[1] == len(traj)):
             raise ValueError('traj and data_y should have same lengths')
-        scatter = figure.scatter(
-            x=traj.time[::stride] / self.t_scale,
-            y=data_y[::stride]
-        )
+
+        for y_line in data_y:
+            scatter = figure.scatter(
+                x=traj.time[::stride] / self.t_scale,
+                y=y_line[::stride]
+            )
 
         line = figure.vertline(self.frame)
 
