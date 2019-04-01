@@ -74,6 +74,8 @@ class martini21(object):
         self.bbdef    =    spl(" N0   Nda    N0    Nd    Na   Nda   Nda    P5    P5")  # Default beads   #@#
         self.bbtyp    = {                                                                   #                 #@#
                      "ALA": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4"),# ALA specific    #@#
+                     "ACE": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # ACE specific    #@#
+                     "NME": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # NME specific    #@#
                      "PRO": spl(" C5    N0    C5    N0    Na    N0    N0    Na    Na"),# PRO specific    #@#
                      "HYP": spl(" C5    N0    C5    N0    N0    N0    N0    Na    Na") # HYP specific    #@#
         }                                                                                   #                 #@#
@@ -149,6 +151,8 @@ class martini21(object):
             "VAL": [spl("AC2"),            [(0.265,None)]],
             "ALA": [],
             "GLY": [],
+            "ACE": [],
+            "NME": [],
             }
 
         # Not all (eg Elnedyn) forcefields use backbone-backbone-sidechain angles and BBBB-dihedrals.
@@ -189,6 +193,8 @@ class martini21(object):
         "VAL":     [[(0,1)]],
         "ALA":     [],
         "GLY":     [],
+        "ACE":     [],
+        "NME":     [],
         }
 
         #----+----------------+
@@ -334,6 +340,8 @@ class martini22(object):
         self.bbdef    =    spl(" N0   Nda    N0    Nd    Na   Nda   Nda    P5    P5")  # Default beads   #@#
         self.bbtyp    = {                                                                   #                 #@#
                     "ALA": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4"), # ALA specific    #@#
+                    "ACE": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # ACE specific    #@#
+                    "NME": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # NME specific    #@#
                     "PRO": spl(" C5    N0    C5    N0    Na    N0    N0    P4    P4"), # PRO specific    #@#
                     "HYP": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4")  # HYP specific    #@#
         }                                                                                   #                 #@#
@@ -409,6 +417,8 @@ class martini22(object):
             "VAL": [spl("AC2"),            [(0.265,None)]],
             "ALA": [],
             "GLY": [],
+            "ACE": [],
+            "NME": [],
             }
 
         # Not all (eg Elnedyn) forcefields use backbone-backbone-sidechain angles and BBBB-dihedrals.
@@ -449,6 +459,8 @@ class martini22(object):
         "VAL":     [[(0,1)]],
         "ALA":     [],
         "GLY":     [],
+        "ACE":     [],
+        "NME":     [],
         }
 
         #----+----------------+
@@ -585,6 +597,8 @@ class martini21p(object):
         self.bbdef    =    spl(" N0   Nda    N0    Nd    Na   Nda   Nda    P5    P5")  # Default beads   #@#
         self.bbtyp    = {                                                                   #                 #@#
                      "ALA": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4"),# ALA specific    #@#
+                     "ACE": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # ACE specific    #@#
+                     "NME": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # NME specific    #@#
                      "PRO": spl(" C5    N0    C5    N0    Na    N0    N0    Na    Na"),# PRO specific    #@#
                      "HYP": spl(" C5    N0    C5    N0    N0    N0    N0    Na    Na") # HYP specific    #@#
         }                                                                                   #                 #@#
@@ -660,6 +674,8 @@ class martini21p(object):
             "VAL": [spl("C2"),            [(0.265,None)]],
             "ALA": [],
             "GLY": [],
+            "ACE": [],
+            "NME": [],
             }
 
         # Not all (eg Elnedyn) forcefields use backbone-backbone-sidechain angles and BBBB-dihedrals.
@@ -700,6 +716,8 @@ class martini21p(object):
         "VAL":     [[(0,1)]],
         "ALA":     [],
         "GLY":     [],
+        "ACE":     [],
+        "NME":     [],
         }
 
         #----+----------------+
@@ -845,6 +863,8 @@ class martini22p(object):
         self.bbdef    =    spl(" N0   Nda    N0    Nd    Na   Nda   Nda    P5    P5")  # Default beads   #@#
         self.bbtyp    = {                                                                   #                 #@#
                     "ALA": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4"), # ALA specific    #@#
+                    "ACE": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # ACE specific    #@#
+                    "NME": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # NME specific    #@#
                     "PRO": spl(" C5    N0    C5    N0    Na    N0    N0    P4    P4"), # PRO specific    #@#
                     "HYP": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4")  # HYP specific    #@#
         }                                                                                   #                 #@#
@@ -920,6 +940,8 @@ class martini22p(object):
           "VAL": [spl("C2"),             [(0.265,None)]],
           "ALA": [],
           "GLY": [],
+          "ACE": [],
+          "NME": [],
           }
 
         # Not all (eg Elnedyn) forcefields use backbone-backbone-sidechain angles and BBBB-dihedrals.
@@ -968,6 +990,8 @@ class martini22p(object):
         "VAL":     [[(0,1)]],
         "ALA":     [],
         "GLY":     [],
+        "ACE":     [],
+        "NME":     [],
         }
 
         #----+----------------+
@@ -1111,6 +1135,8 @@ class elnedyn(object):
         self.bbdef    =     spl(" N0   Nda    N0    Nd    Na   Nda   Nda    P5    P5")  # Default beads   #@#
         self.bbtyp    = {                                                                    #                 #@#
                      "ALA": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4"), # ALA specific    #@#
+                     "ACE": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # ACE specific    #@#
+                     "NME": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # NME specific    #@#
                      "PRO": spl(" C5    N0    C5    N0    Na    N0    N0    Na    Na"), # PRO specific    #@#
                      "HYP": spl(" C5    N0    C5    N0    N0    N0    N0    Na    Na")  # HYP specific    #@#
         }                                                                                    #                 #@#
@@ -1184,6 +1210,8 @@ class elnedyn(object):
         'VAL': [spl("C2"),              [(0.200, None)]],
         'GLY': [],
         'ALA': [],
+        "ACE": [],
+        "NME": [],
         }
 
         # Not all (eg Elnedyn) forcefields use backbone-backbone-sidechain angles and BBBB-dihedrals.
@@ -1225,6 +1253,8 @@ class elnedyn(object):
         "VAL":     [[(0,1)]],
         "ALA":     [],
         "GLY":     [],
+        "ACE":     [],
+        "NME":     [],
         }
 
         #----+----------------+
@@ -1358,6 +1388,8 @@ class elnedyn22(object):
         self.bbdef    =     spl(" N0   Nda    N0    Nd    Na   Nda   Nda    P5    P5")  # Default beads   #@#
         self.bbtyp    = {                                                                    #                 #@#
                      "ALA": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4"), # ALA specific    #@#
+                     "ACE": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # ACE specific    #@#
+                     "NME": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # NME specific    #@#
                      "PRO": spl(" C5    N0    C5    N0    Na    N0    N0    P4    P4"), # PRO specific    #@#
                      "HYP": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4")  # HYP specific    #@#
         }                                                                                    #                 #@#
@@ -1432,6 +1464,8 @@ class elnedyn22(object):
         'VAL': [spl("C2"),              [(0.200, None)]],
         'GLY': [],
         'ALA': [],
+        "ACE": [],
+        "NME": [],
         }
 
         # Not all (eg Elnedyn) forcefields use backbone-backbone-sidechain angles and BBBB-dihedrals.
@@ -1474,6 +1508,8 @@ class elnedyn22(object):
         "VAL":     [[(0,1)]],
         "ALA":     [],
         "GLY":     [],
+        "ACE":     [],
+        "NME":     [],
         }
 
         #----+----------------+
@@ -1603,6 +1639,8 @@ class elnedyn22p(object):
         self.bbdef    =     spl(" N0   Nda    N0    Nd    Na   Nda   Nda    P5    P5")  # Default beads   #@#
         self.bbtyp    = {                                                                    #                 #@#
                      "ALA": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4"), # ALA specific    #@#
+                     "ACE": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # ACE specific    #@#
+                     "NME": spl(" N0    N0    N0    N0    N0    N0    N0    N0    N0"), # NME specific    #@#
                      "PRO": spl(" C5    N0    C5    N0    Na    N0    N0    P4    P4"), # PRO specific    #@#
                      "HYP": spl(" C5    N0    C5    N0    N0    N0    N0    P4    P4")  # HYP specific    #@#
         }                                                                                    #                 #@#
@@ -1678,6 +1716,8 @@ class elnedyn22p(object):
         'VAL': [spl("C2"),              [(0.200, None)]],
         'GLY': [],
         'ALA': [],
+        "ACE": [],
+        "NME": [],
         }
 
         # Not all (eg Elnedyn) forcefields use backbone-backbone-sidechain angles and BBBB-dihedrals.
@@ -1729,6 +1769,8 @@ class elnedyn22p(object):
         "VAL":     [[(0, 1)]],
         "ALA":     [],
         "GLY":     [],
+        "ACE":     [],
+        "NME":     [],
         }
 
         #----+----------------+
@@ -2333,8 +2375,8 @@ rnares1 = " rA rC rG rU"
 
 # Amino acid nucleic acid codes:
 # The naming (AA and '3') is not strictly correct when adding DNA/RNA, but we keep it like this for consistincy.
-AA3     = spl("TRP TYR PHE HIS HIH ARG LYS CYS ASP GLU ILE LEU MET ASN PRO HYP GLN SER THR VAL ALA GLY"+dnares3+rnares3) #@#
-AA1     = spl("  W   Y   F   H   H   R   K   C   D   E   I   L   M   N   P   O   Q   S   T   V   A   G"+dnares1+rnares1) #@#
+AA3     = spl("TRP TYR PHE HIS HIH ARG LYS CYS ASP GLU ILE LEU MET ASN PRO HYP GLN SER THR VAL ALA GLY ACE NME"+dnares3+rnares3) #@#
+AA1     = spl("  W   Y   F   H   H   R   K   C   D   E   I   L   M   N   P   O   Q   S   T   V   A   G   J   B"+dnares1+rnares1) #@#
 
 # Dictionaries for conversion from one letter code to three letter code v.v.
 AA123, AA321 = hash(AA1, AA3), hash(AA3, AA1)
@@ -2414,6 +2456,8 @@ class CoarseGrained(object):
         "VAL":  nsplit(bb, "CB CG1 CG2"),
         "TRP":  nsplit(bb, "CB CG CD2", "CD1 HD1 NE1 HE1 CE2", "CE3 HE3 CZ3 HZ3", "CZ2 HZ2 CH2 HH2"),
         "TYR":  nsplit(bb, "CB CG CD1 HD1", "CD2 HD2 CE2 HE2", "CE1 HE1 CZ OH HH"),
+        "ACE":  nsplit("CH3 1HH3 2HH3 3HH3"),
+        "NME":  nsplit("N HN CH3 1HH3 2HH3 3HH3"),
         "POPE": phosphatydilethanolamine + palmitoyl1 + oleyl2,
         "DOPE": phosphatydilethanolamine + oleyl1     + oleyl2,
         "DPPE": phosphatydilethanolamine + palmitoyl1 + palmitoyl2,
@@ -3887,7 +3931,7 @@ class Topology(object):
         positionCa = []
         for residue in chain.residues:
             for atom in residue:
-                if atom[0] == "CA":
+                if atom[0] == "CA" or atom[0] == "CH3":
                     positionCa.append(atom[4:])
 
         # Residue numbers for this moleculetype topology
