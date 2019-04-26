@@ -1956,8 +1956,9 @@ certain secondary structure type for designation.
 Topology
 --------
 Several options are available to tune the resulting topology. By
-default, termini are charged, and chain breaks are kept neutral. This
-behaviour can be changed using -nt and -cb, respectively.
+default, termini are charged (unless they are ACE/NME), and chain breaks
+are kept neutral. This behaviour can be changed using -nt and -cb,
+respectively. ACE/NME capping residues are never charged.
 
 Disulphide bridges can be specified using -cys. This option can be
 given multiple times on the command line. The argument is a pair of
@@ -2273,9 +2274,9 @@ def option_parser(args, options, lists, version=0):
     options['CystineMaxDist2']   = CystineMaxDist2
     options['multi']             = lists['multi']
 
-    logging.info("Chain termini will%s be charged"%(options['NeutralTermini'] and " not" or ""))
+    logging.info("Chain termini other than ACE/NME will%s be charged"%(options['NeutralTermini'] and " not" or ""))
 
-    logging.info("Residues at chain brakes will%s be charged"%((not options['ChargesAtBreaks']) and " not" or ""))
+    logging.info("Residues at chain breaks other than ACE/NME will%s be charged"%((not options['ChargesAtBreaks']) and " not" or ""))
 
     if 'ForceField' in options:
         logging.info("The %s forcefield will be used."%(options['ForceField'].name))
@@ -3947,14 +3948,18 @@ class Topology(object):
 
         # If termini need to be charged, change the bead types
         if not self.options['NeutralTermini']:
-            bb[0]  = "Qd"
-            bb[-1] = "Qa"
+            if seqss[0][1] != 'ACE':
+                bb[0]  = "Qd"
+            if seqss[-1][1] != 'NME':
+                bb[-1] = "Qa"
 
         # If breaks need to be charged, change the bead types
         if self.options['ChargesAtBreaks']:
             for i in breaks:
-                bb[i]   = "Qd"
-                bb[i-1] = "Qa"
+                if seqss[0][1] != 'ACE':
+                    bb[0]  = "Qd"
+                if seqss[-1][1] != 'NME':
+                    bb[-1] = "Qa"
 
         # For backbone parameters, iterate over fragments, inferred from breaks
         for i, j in zip([0]+breaks, breaks+[-1]):
