@@ -8,6 +8,9 @@ import numpy as np
 from itertools import tee, count
 import mdtraj.core.element as elem
 from re import sub
+import contextlib
+import pathlib
+from pathlib import Path
 
 aa_tlc = [
     'ala', 'arg', 'asn', 'asp', 'cys', 'glu', 'gln', 'gly', 'his',
@@ -82,8 +85,11 @@ def get_env_from_sh(scriptfn, shell='sh', inheritenv=False):
 
     env_out = {}
     for line in subprocess.getoutput(command).split("\n"):
-        key, value = line.split("=")
-        env_out[key]= value
+        key, line_is_proper, value = line.partition("=")
+        if line_is_proper:
+            env_out[key]= value
+        else:
+            print("WARNING: Line", line, "has no value")
     return env_out
 
 def source(scriptfn, shell='sh'):
@@ -289,6 +295,9 @@ def md_load(
         atom_indices = top.select(selection)
     kwargs["atom_indices"] = atom_indices
 
+    if isinstance(filename_or_filenames, pathlib.PurePath):
+        filename_or_filenames = str(filename_or_filenames)
+
     pdbkwargs.update(kwargs)
     try:
         # If it's a pdb, just load it without trying to be clever
@@ -462,3 +471,35 @@ def save_gro(filename, traj, velxyz=None, force_overwrite=True, precision=3):
             for line in lines:
                 f.write(line)
 
+
+
+@contextlib.contextmanager
+def modified_environ(*remove, **update):
+    """
+    Temporarily updates the ``os.environ`` dictionary in-place.
+
+    The ``os.environ`` dictionary is updated in-place so that the modification
+    is sure to work in all situations.
+
+    :param remove: Environment variables to remove.
+    :param update: Dictionary of environment variables and values to add/update.
+    """
+    env = os.environ
+    update = update or {}
+    remove = remove or []
+
+    # List of environment variables being updated or removed.
+    stomped = (set(update.keys()) | set(remove)) & set(env.keys())
+    # Environment variables and values to restore on exit.
+    update_after = {k: env[k] for k in stomped}
+    # Environment variables and values to remove on exit.
+    remove_after = frozenset(k for k in update if k not in env)
+
+
+    try:
+        env.update({k: str(v) for k, v in update.items()})
+        [env.pop(k, None) for k in remove]
+        yield env
+    finally:
+        env.update(update_after)
+        [env.pop(k) for k in remove_after]

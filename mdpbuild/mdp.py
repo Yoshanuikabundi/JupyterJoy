@@ -397,11 +397,14 @@ for cls in gmx_2018_series:
 
     @cls.add_method
     def align_temps(self):
-        splits = zip(
-            self.tc_grps.split(),
-            self.ref_t.split(),
-            self.tau_t.split()
-        )
+        if isinstance(self.tc_grps, Default):
+            splits = [['🏳️‍🌈', self.ref_t, self.tau_t]]
+        else:
+            splits = zip(
+                self.tc_grps.split(),
+                self.ref_t.split(),
+                self.tau_t.split()
+            )
 
         maxlens = ((max(len(s) for s in tup), tup) for tup in splits)
 
@@ -412,6 +415,9 @@ for cls in gmx_2018_series:
             self.ref_t,
             self.tau_t
         ) = ('  '.join(t).strip() for t in zip(*paddeds))
+
+        if self.tc_grps == '🏳️‍🌈':
+            del self.tc_grps
 
         return self
 
@@ -440,7 +446,10 @@ for cls in gmx_2018_series:
         else:
             temp_str = f'{temp:.2f}'
 
-        num_groups = len(self.tc_grps.split())
+        if isinstance(self.tc_grps, Default):
+            num_groups = 1
+        else:
+            num_groups = len(self.tc_grps.split())
         self.ref_t = ' '.join([temp_str] * num_groups)
         self.align_temps()
 
@@ -478,3 +487,35 @@ for cls in gmx_2018_series:
         self.dt = dt_ps
         self.nsteps = nsteps
         self.comment_total_time()
+
+
+    @cls.add_method
+    def set_output_freq(self, freq_ps):
+        dt_ps = float(self.dt)
+        nst_output = int(freq_ps / dt_ps)
+        nsteps = int(self.nsteps)
+
+        if nsteps % nst_output:
+            raise ValueError(
+                f'nsteps={nsteps} is not divisible by {nst_output}'
+            )
+
+        print(f"Setting nstlog, nstenergy and nstxout_compressed to {nst_output}")
+
+        self.nstlog = nst_output
+        self.comment(
+            'nstlog',
+            f'{freq_ps} ps ; Steps between writing to .log file'
+        )
+        self.nstenergy = nst_output
+        self.comment(
+            'nstenergy',
+            f'{freq_ps} ps ; Steps between writing energies to .edr file'
+        )
+        self.nstxout_compressed = nst_output
+        self.comment(
+            'nstxout_compressed',
+            f'{freq_ps} ps ; Steps between writing compressed positions and velocities to .xtc file'
+        )
+
+

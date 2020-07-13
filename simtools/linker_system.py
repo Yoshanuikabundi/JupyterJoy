@@ -321,12 +321,18 @@ class GmxLinkerSystem(GmxRest2System):
         max_temp=300.0,
         num_reps=1,
         exchange_freq=100,
+        cap=True
     ):
         self.seq = sequence
 
         name = sequence if name is None else name
 
-        structure = make_extended_capped_peptide(sequence)
+        if cap:
+            structure = make_extended_capped_peptide(sequence)
+        else:
+            structure = make_extended_peptide(sequence)
+        self.capped = cap
+
         traj = bio_struct_to_mdtraj(structure)
 
         super().__init__(
@@ -346,6 +352,14 @@ class GmxLinkerSystem(GmxRest2System):
     def initialise_aa(self):
         if self.ff is None:
             raise ValueError("Cannot initialize an AA system without a force field")
+
+        if self.capped:
+            stdin='3\n5\n'
+        else:
+            stdin='1\n1\n'
+            sele = self.traj.top.select('not resname ACE NME')
+            self.traj.atom_slice(sele, inplace=True)
+
         with TemporaryDirectory() as td:
             self.ff.write(td)
             pdbin = 'extended.pdb'
@@ -354,7 +368,7 @@ class GmxLinkerSystem(GmxRest2System):
             self.traj.save(f'{td}/{pdbin}')
             _, stdout_data, stderr_data = self.call_gmx(
                 cmd='pdb2gmx',
-                stdin='3\n5\n',
+                stdin=stdin,
                 cwd=td,
                 f=pdbin,
                 o=pdbout,
@@ -1008,9 +1022,18 @@ class GMXLinkerSystem():
     def nstlist(self, value):
         self._nstlist = None
 
-    def prep_rest2(self, deffnm, path, mdp, startframes):
+    def prep_rest2(
+        self,
+        deffnm,
+        path,
+        mdp,
+        startframes,
+        temperedsele=['Protein_chain_A'],
+        maxwarn=1
+    ):
         rpath = os.path.abspath(path)
 
+        # Create an iterator over frames, reusing them if necessary
         if isinstance(startframes, md.Trajectory) and len(startframes) == 1:
             frame_iter = cycle(startframes)
         elif self.num_reps == len(startframes):
@@ -1022,7 +1045,9 @@ class GMXLinkerSystem():
             os.mkdir(rpath)
         except:
             pass
+
         for t in self.ladder:
+            # Create a folder for this temperature
             if isinstance(t, str):
                 tstr = t
             else:
@@ -1034,6 +1059,7 @@ class GMXLinkerSystem():
             except:
                 pass
 
+            # Save the starting coordinates
             coordin = f'{tpath}/{deffnm}.start.gro'
             frame = next(frame_iter)
             try:
@@ -1041,6 +1067,7 @@ class GMXLinkerSystem():
             except AttributeError:
                 coordin = os.path.abspath(frame)
 
+            # Save the MDP
             mdpin = f'{tpath}/{deffnm}.mdp'
             if mdp is None:
                 mdp = self.mdp
@@ -1048,11 +1075,13 @@ class GMXLinkerSystem():
             mdp.set_temperature(self.min_temp)
             mdp.write(mdpin)
 
+            # Write the untempered topology
             topin = self.write_top(tpath)
             base, _, ext = topin.rpartition('.')
             topinout = f'{tpath}/{deffnm}.rest2_{tstr}.{ext}'
             tprinout = f'{tpath}/{deffnm}.tpr'
 
+            # Temper the topology
             with TemporaryDirectory() as cwd:
                 preprocessed_top = 'preproc.top'
                 _, stdout_data, stderr_data = self.call_gmx(
@@ -1069,10 +1098,12 @@ class GMXLinkerSystem():
                 temper_from_file(
                     f'{cwd}/{preprocessed_top}',
                     topinout,
-                    ['Protein_chain_A'],
+                    temperedsele,
                     float(self.min_temp),
                     float(t)
                 )
+
+            # Run grompp
 
             with open(f'{tpath}/plumed.dat', 'w') as f:
                 f.write('# Necessary for hrex')
@@ -1085,7 +1116,7 @@ class GMXLinkerSystem():
                 c=coordin,
                 p=topinout,
                 o=tprinout,
-                maxwarn=1
+                maxwarn=maxwarn
             )
             print(stderr_data)
             print(stdout_data)

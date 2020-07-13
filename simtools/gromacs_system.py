@@ -11,6 +11,7 @@ import io
 import os
 from itertools import cycle
 from shutil import copyfile
+import re
 
 from pathlib import Path
 
@@ -22,9 +23,6 @@ from JupyterJoy.tophat import Topology
 from JupyterJoy.simtools.prep_remd import calc_temps
 from JupyterJoy.simtools.rest2 import temper_from_file
 from JupyterJoy.funfuncs import unwrap, make_martini_ndx, write_dict_to_ndx, load_gro, save_gro
-
-import PeptideBuilder as pb
-import Bio.PDB
 
 import numpy as np
 from numpy import sqrt
@@ -338,7 +336,6 @@ class GmxCaller():
 
         kwargs.setdefault('pin', 'on')
         kwargs.setdefault('nb', 'gpu')
-        kwargs.setdefault('pme', 'gpu')
         kwargs.setdefault('v', 'True')
 
         cls.call_gmx(
@@ -444,87 +441,6 @@ class GmxSystem(GmxCaller):
 
         self.ndx = None
 
-
-    def martinize_m22(self, name=None, cwd='.', dssp='mkdssp', ss=None):
-        cwd = Path(cwd).absolute()
-        if name is None:
-            name = self.name
-
-        forcefield_itp = '''
-        ;
-        ; Martini 2.2 force field
-        ;
-
-        #include "martini_v2.2.itp"
-        #include "martini_v2.2_aminoacids.itp"
-        #include "martini_v2.0_ions.itp"
-        '''.strip()
-
-        self.ff_path = cwd / 'martini22.ff'
-        os.makedirs(self.ff_path, exist_ok=True)
-        urlretrieve(
-            "http://cgmartini.nl/images/parameters/ITP/martini_v2.2.itp",
-            self.ff_path / "martini_v2.2.itp"
-        )
-        urlretrieve(
-            "http://cgmartini.nl/images/parameters/ITP/martini_v2.2_aminoacids.itp",
-            self.ff_path / "martini_v2.2_aminoacids.itp"
-        )
-        urlretrieve(
-            "http://cgmartini.nl/images/parameters/ITP/martini_v2.0_ions.itp",
-            self.ff_path / "martini_v2.0_ions.itp"
-        )
-        with open(self.ff_path / 'forcefield.itp', 'w') as f:
-            print(forcefield_itp, file=f)
-        self.ff = GMXForceField(self.ff_path)
-
-        pdbin = cwd / f'{name}.pdb'
-        pdbout = cwd / f'{name}_cg.pdb'
-        topout = cwd / f'{name}.top'
-        ndxout = cwd / f'{name}_map.ndx'
-
-        self.save_traj(pdbin)
-
-        scriptname = 'martinize.py'
-        copyfile(
-            Path(unwrap(JupyterJoy.__path__)) / 'bin' / 'martinize.py',
-            scriptname
-        )
-
-        args = [
-            'python3', scriptname,
-            '-f', pdbin,
-            '-o', topout,
-            '-x', pdbout,
-            '-nmap', ndxout,
-            '-name', name,
-            '-ff', 'martini22',
-            '-elastic',
-            '-p', 'backbone'
-        ]
-
-        if ss is None:
-            args += ['-dssp', dssp]
-        else:
-            args += ['-ss', ss]
-
-        p = sp.run(
-            args,
-            encoding='utf-8',
-            stdout=sp.PIPE,
-            stderr=sp.STDOUT,
-            cwd=cwd
-        )
-        print(p.stdout)
-        p.check_returncode()
-
-        self.topol = TopolWithItps(topout)
-        self.topol.includes[0] = '#include "martini22.ff/forcefield.itp"'
-        Topology.write(self.topol, topout)
-
-        self.load_traj(pdbout)
-
-        self.ndx = make_martini_ndx(self.traj.top)
 
 
     def orient_protein(self, target_vec):
@@ -744,9 +660,6 @@ class GmxSystem(GmxCaller):
             self.topol = TopolWithItps(topinout)
             self.load_traj(f'{path}/{pdbout}')
             self.ndx = make_martini_ndx(self.traj.top)
-
-    def salt_m22(self, conc=0.15, solname='W', pname='NA+', nname='CL-', **kwargs):
-        return self.salt(conc*4, solname=solname, pname=pname, nname=nname, **kwargs)
 
     def salt(self, conc=0.15, solname='SOL', **kwargs):
         with TemporaryDirectory() as path:
@@ -1043,6 +956,287 @@ class GmxSystem(GmxCaller):
 
         return (traj, df)
 
+
+class ScaledNBGmxSystem(GmxSystem):
+    @staticmethod
+    def _scale_c6c12(
+        c6,
+        c12,
+        scale_eps=lambda x: x,
+        scale_sig=lambda x: x
+    ):
+        c6, c12 = map(float, (c6, c12))
+
+        sigma = (c12/c6)**(1/6)
+        eps = c6**2 / (4 * c12)
+
+        eps = scale_eps(eps)
+        sigma = scale_sig(sigma)
+
+        c6 = 4 * eps * sigma ** 6
+        c12 = 4 * eps * sigma ** 12
+        c6, c12 = map(lambda v: f'{v:0.4E}', (c6, c12))
+        return c6, c12
+
+
+    @staticmethod
+    def _to_line(data, comment):
+        data = list(data) + [';', comment[:-1]] if comment else data
+        return ' '.join(str(s).ljust(4) for s in data) + '\n'
+
+
+    @classmethod
+    def _scale_ff(
+        cls,
+        filename,
+        scale_eps=lambda x: x,
+        scale_sig=lambda x: x
+    ):
+        filename = Path(filename).absolute()
+        AtomType = namedtuple(
+            'AtomType',
+            ['atomtype', 'mass', 'charge', 'ptype', 'lj1', 'lj2']
+        )
+        NbParam = namedtuple(
+            'NbParam',
+            ['i', 'j', 'funda', 'lj1', 'lj2']
+        )
+        with open(filename) as f:
+            sect = None
+            for line in f:
+                # Seperate out comments
+                data, _, comment = line.partition(';')
+                # If we're in a section declaration, set sect
+                data = data.strip()
+                if data.startswith('[') and data.endswith(']'):
+                    sect = data[1:-2].strip()
+                    yield line
+                    continue
+
+                # Now modify the line based on which section we're in
+                if sect == 'atomtypes' and data:
+                    atomtype, mass, charge, ptype, lj1, lj2 = data.split()
+                    lj1, lj2 = map(lambda v: f'{float(v):0.4E}', (lj1, lj2))
+                    # Keep the original atom type
+                    yield cls._to_line(
+                        AtomType(atomtype, mass, charge, ptype, lj1, lj2),
+                        comment
+                    )
+                    # Add a new atomtype with the milk symbol for proteins
+                    yield cls._to_line(
+                        AtomType(atomtype + '🥛', mass, charge, ptype, lj1, lj2),
+                        comment
+                    )
+                elif sect == 'nonbond_params' and data:
+                    i, j, funda, lj1, lj2 = data.split()
+                    lj1, lj2 = map(lambda v: f'{float(v):0.4E}', (lj1, lj2))
+                    # Keep the original interaction
+                    yield cls._to_line(
+                        NbParam(i, j, funda, lj1, lj2),
+                        comment
+                    )
+                    # Add new interactions for protein-nonprotein interactions
+                    yield cls._to_line(
+                        NbParam(i, j + '🥛', funda, lj1, lj2),
+                        comment
+                    )
+                    if i != j:
+                        cls._to_line(
+                            NbParam(i + '🥛', j, funda, lj1, lj2),
+                            comment
+                        )
+                    # And add the scaled interaction between protein beads
+                    yield cls._to_line(
+                        NbParam(
+                            i + '🥛',
+                            j + '🥛',
+                            funda,
+                            *cls._scale_c6c12(lj1, lj2, scale_eps, scale_sig)
+                        ),
+                        comment
+                    )
+                else:
+                    yield line
+
+    @classmethod
+    def _get_scaled_ff(
+        cls,
+        url,
+        dest,
+        scale_eps=None,
+        scale_sig=None
+    ):
+        urlretrieve(url, dest)
+        if scale_eps is None and scale_sig is None:
+            return
+
+        scale_eps = (lambda x: x) if scale_eps is None else scale_eps
+        scale_sig = (lambda x: x) if scale_sig is None else scale_sig
+        lines_out = list(cls._scale_ff(dest, scale_eps, scale_sig))
+        with open(dest, 'w') as f:
+            for line in lines_out:
+                f.write(line)
+
+    @staticmethod
+    def _milkify_itp(f):
+        atomsect = False
+        for line in f:
+            data, _, comment = line.partition(';')
+            data = data.strip()
+            if data == '[ atoms ]':
+                atomsect = True
+                yield line
+                continue
+            elif data.startswith('[') and data.endswith(']'):
+                atomsect = False
+                yield line
+                continue
+
+            if atomsect and data:
+                atomn, atomtype, resn, resname, atomname, _, charge = data.split()
+                line = line.replace(atomtype, atomtype + '🥛')
+
+            yield line
+
+    @staticmethod
+    def _get_itps_from_martinize_stdout(stdout):
+        pattern = re.compile(r'INFO +Output contains (\d+) molecules:')
+        lines = iter(stdout.splitlines())
+        for line in lines:
+            match = pattern.match(line)
+            if match:
+                break
+        n_lines = int(match.group(1))
+        for i in range(n_lines):
+            line = next(lines)
+            bulletpoint = f'  {i+1}->  '
+            chain_name_index = line.find(bulletpoint) + len(bulletpoint)
+            yield line[chain_name_index:line.find(" (chain")]
+
+
+class GmxMartiniSystem(ScaledNBGmxSystem):
+    @staticmethod
+    def _na_to_coil(s):
+        if s == 'NA':
+            return ' '
+        elif len(s) == 1:
+            return s
+        else:
+            raise ValueError(f'{s} is not a single character code')
+
+    def martinize_m22(self, name=None, cwd='.', ss=None, scale_protein_eps=None, scale_protein_sig=None):
+        cwd = Path(cwd).absolute()
+        if name is None:
+            name = self.name
+
+        forcefield_itp = '''
+        ;
+        ; Martini 2.2 force field
+        ;
+
+        #include "martini_v2.2.itp"
+        #include "martini_v2.2_aminoacids.itp"
+        #include "martini_v2.0_ions.itp"
+        '''.strip()
+
+        self.ff_path = cwd / 'martini22.ff'
+        os.makedirs(self.ff_path, exist_ok=True)
+        # urlretrieve(
+        #     "http://cgmartini.nl/images/parameters/ITP/martini_v2.2.itp",
+        #     self.ff_path / "martini_v2.2.itp"
+        # )
+        self._get_scaled_ff(
+            "http://cgmartini.nl/images/parameters/ITP/martini_v2.2.itp",
+            self.ff_path / "martini_v2.2.itp",
+            scale_protein_eps,
+            scale_protein_sig
+        )
+        urlretrieve(
+            "http://cgmartini.nl/images/parameters/ITP/martini_v2.2_aminoacids.itp",
+            self.ff_path / "martini_v2.2_aminoacids.itp"
+        )
+        urlretrieve(
+            "http://cgmartini.nl/images/parameters/ITP/martini_v2.0_ions.itp",
+            self.ff_path / "martini_v2.0_ions.itp"
+        )
+        with open(self.ff_path / 'forcefield.itp', 'w') as f:
+            print(forcefield_itp, file=f)
+        self.ff = GMXForceField(self.ff_path)
+
+        pdbin = cwd / f'{name}.pdb'
+        pdbout = cwd / f'{name}_cg.pdb'
+        topout = cwd / f'{name}.top'
+        ndxout = cwd / f'{name}_map.ndx'
+
+        self.save_traj(pdbin)
+
+        scriptname = 'martinize.py'
+        copyfile(
+            Path(unwrap(JupyterJoy.__path__)) / 'bin' / 'martinize.py',
+            scriptname
+        )
+
+        if ss is None:
+            ss = ''.join(self._na_to_coil(s) for s in unwrap(
+                md.compute_dssp(self.traj, simplified=False))
+            )
+        if len(ss) != self.traj.n_residues:
+            raise ValueError(
+                f'System has {self.traj.n_residues} residues, but we '
+                f'only have {len(ss)} secondary structure codes'
+            )
+
+        args = [
+            'python3', scriptname,
+            '-f', pdbin,
+            '-o', topout,
+            '-x', pdbout,
+            '-nmap', ndxout,
+            '-name', name,
+            '-ff', 'martini22',
+            '-elastic',
+            '-p', 'backbone',
+            '-ss', ss
+        ]
+
+
+        p = sp.run(
+            args,
+            encoding='utf-8',
+            stdout=sp.PIPE,
+            stderr=sp.STDOUT,
+            cwd=cwd
+        )
+
+        print(p.stdout)
+        p.check_returncode()
+
+        if scale_protein_eps is not None or scale_protein_sig is not None:
+            for itp in self._get_itps_from_martinize_stdout(p.stdout):
+                with open(cwd / (itp + ".itp")) as f:
+                    lines = list(self._milkify_itp(f))
+                with open(cwd / (itp + ".itp"), 'w') as f:
+                    f.writelines(lines)
+
+
+        self.topol = TopolWithItps(topout)
+        self.topol.includes[0] = '#include "martini22.ff/forcefield.itp"'
+        Topology.write(self.topol, topout)
+
+        self.load_traj(pdbout)
+
+        self.ndx = make_martini_ndx(self.traj.top)
+
+    def salt(self, conc=0.15, solname='W', pname='NA+', nname='CL-', **kwargs):
+        return super().salt(
+            conc*4,
+            solname=solname,
+            pname=pname,
+            nname=nname,
+            **kwargs
+        )
+
+
 class GmxRest2System(GmxSystem):
     def __init__(
         self,
@@ -1050,7 +1244,7 @@ class GmxRest2System(GmxSystem):
         traj,
         ffpath,
         mdmdp,
-        watermodel='tips3p',
+        watermodel,
         emmdp=None,
         min_temp=300.0,
         max_temp=300.0,
@@ -1148,7 +1342,15 @@ class GmxRest2System(GmxSystem):
     def nstlist(self, value):
         self._nstlist = None
 
-    def prep_rest2(self, deffnm, path, mdp, startframes):
+    def prep_rest2(
+        self,
+        deffnm,
+        path,
+        mdp,
+        startframes,
+        maxwarn=1,
+        temperedsele=['Protein_chain_A']
+    ):
         rpath = Path(path).absolute()
 
         if isinstance(startframes, md.Trajectory) and len(startframes) == 1:
@@ -1202,7 +1404,7 @@ class GmxRest2System(GmxSystem):
                 temper_from_file(
                     cwd / preprocessed_top,
                     topinout,
-                    ['Protein_chain_A'],
+                    temperedsele,
                     float(self.min_temp),
                     float(t)
                 )
@@ -1218,7 +1420,7 @@ class GmxRest2System(GmxSystem):
                 c=coordin,
                 p=topinout,
                 o=tprinout,
-                maxwarn=1
+                maxwarn=maxwarn
             )
             print(stderr_data)
             print(stdout_data)

@@ -2521,7 +2521,8 @@ def aver(b):
 # [ name, resname, resid, chain, x, y, z ]
 def map(r, ca2bb = False):
     p = CoarseGrained.mapping[r[0][1]]     # Mapping for this residue
-    if ca2bb: p[0] = ["CA"]                # Elnedyn maps BB to CA, ca2bb is False or True
+
+    if ca2bb and r[0][1] != 'ACE' and r[0][1] != 'NME': p[0] = ["CA"] # Elnedyn maps BB to CA, ca2bb is False or True
     # Get the name, mass and coordinates for all atoms in the residue
     a = [(i[0], CoarseGrained.mass.get(i[0][0], 0), i[4:]) for i in r]
     # Store weight, coordinate and index for atoms that match a bead
@@ -2713,6 +2714,11 @@ def call_dssp(chain, atomlist, executable='dsspcmbi'):
     for line in open(ssdfile).readlines():
         if main and not line[13] == "!": ss += line[16]
         if line[:15] == '  #  RESIDUE AA': main = 1
+
+    if atomlist[0][1] == 'ACE':
+        ss = ' ' + ss
+    if atomlist[-1][1] == 'NME':
+        ss = ss + ' '
     return ss
 
 ssDetermination = {
@@ -3335,7 +3341,7 @@ class Chain(object):
             self.ss = len(self)*ss
         elif len(ss) != len(self):
             raise ValueError(
-                "length of ss ({}) and self ({}) don't match" % (len(ss), len(self))
+                "length of ss (%s) and self (%s) don't match" % (len(ss), len(self))
             )
         else:
             self.ss = ss
@@ -3427,11 +3433,12 @@ class Chain(object):
                     beads = add_dummy(beads, dist=0.14, n=2)
                 elif residue[0][1] in self.options['ForceField'].charged:
                     beads = add_dummy(beads, dist=0.11, n=1)
-            except ValueError:
+            except ValueError as e:
                 logging.error("Too many atoms missing from residue %s %d(ch:%s):",
                               residue[0][1], residue[0][2]-(32 << 20), residue[0][3])
                 logging.error(repr([i[0] for i in residue]))
                 fail = True
+                raise e
 
             for name, (x, y, z), ids in beads:
                 # Add the bead with coordinates and secondary structure id to the list
@@ -4408,6 +4415,7 @@ class Topology(object):
 ## 8 # MAIN #  -> @MAIN <-
 #############
 import sys, logging, random, math, os, re
+from collections import defaultdict
 
 
 def main(options):
@@ -4479,10 +4487,14 @@ def main(options):
 
         # Check all chains
         keep = []
+        counts = defaultdict(lambda: 0)
         for chain in chains:
             if chain.type() == "Water":
                 logging.info("Removing %d water molecules (chain %s)." % (len(chain), chain.id))
             elif chain.type() in ("Protein", "Nucleic"):
+                counts[chain.id] += 1
+                if counts[chain.id] > 1:
+                    chain.id += str(counts[chain.id])
                 keep.append(chain)
             # This is currently not active:
             elif options['RetainHETATM']:
